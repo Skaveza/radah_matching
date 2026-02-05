@@ -1,0 +1,42 @@
+<?php
+require __DIR__ . '/bootstrap.php';
+require __DIR__ . '/firestore_service.php';
+
+header("Content-Type: application/json");
+
+function json_response($data, int $code = 200)
+{
+    http_response_code($code);
+    echo json_encode($data, JSON_PRETTY_PRINT);
+    exit;
+}
+
+try {
+    $firestore = new FirestoreService();
+    $collection = $firestore->collection("admin_notifications");
+
+    // only unread notifications
+    $query = $collection->where("status", "==", "unread");
+    $documents = $query->documents();
+
+    $results = [];
+    foreach ($documents as $doc) {
+        if (!$doc->exists()) continue;
+        $row = $doc->data();
+        $row["id"] = $doc->id();
+        $results[] = $row;
+    }
+
+    json_response([
+        "success" => true,
+        "count" => count($results),
+        "notifications" => $results
+    ]);
+
+} catch (Exception $e) {
+    json_response([
+        "success" => false,
+        "error" => "Server error",
+        "details" => $e->getMessage()
+    ], 500);
+}
