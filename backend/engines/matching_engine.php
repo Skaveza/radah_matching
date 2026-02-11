@@ -17,6 +17,7 @@ class MatchingEngine
     {
         $projectDesc = $project["description"] ?? "";
         $budgetRange = $project["budget_range"] ?? "under_5000";
+        $projectRegion = $project["region"] ?? null;
 
         $projectSignals = NLPExtractor::extractAllSignals($projectDesc);
 
@@ -47,7 +48,8 @@ class MatchingEngine
                 $projectSignals,
                 $projectVec,
                 $idf,
-                $proTokens[$p["id"]] ?? []
+                $proTokens[$p["id"]] ?? [],
+                $projectRegion // NEW: pass project region for scoring
             );
         }
 
@@ -125,7 +127,8 @@ class MatchingEngine
         array $projectSignals,
         array $projectVec,
         array $idf,
-        array $professionalTokens
+        array $professionalTokens,
+        ?string $projectRegion = null // NEW
     ): array
     {
         $summary = $professional["professional_summary"] ?? "";
@@ -138,7 +141,6 @@ class MatchingEngine
         $capOverlap = array_values(array_intersect($projectCaps, $proCaps));
         $capOverlapCount = count($capOverlap);
 
-        // Scoring rule
         if ($capOverlapCount >= 2) $capScore = 40;
         elseif ($capOverlapCount === 1) $capScore = 28;
         else $capScore = 8;
@@ -180,7 +182,13 @@ class MatchingEngine
             default => 1
         };
 
-        $total = $capScore + $industryScore + $tfidfScore + $expScore + $availabilityScore;
+        // 6) REGION MATCHING BOOST (NEW)
+        $regionScore = 0;
+        if ($projectRegion && isset($professional["region"]) && $professional["region"] === $projectRegion) {
+            $regionScore = 5; // arbitrary boost for same region
+        }
+
+        $total = $capScore + $industryScore + $tfidfScore + $expScore + $availabilityScore + $regionScore;
 
         return [
             "professional" => $professional,
@@ -193,6 +201,7 @@ class MatchingEngine
                 "tfidf_score" => round($tfidfScore, 2),
                 "experience_score" => $expScore,
                 "availability_score" => $availabilityScore,
+                "region_score" => $regionScore, // NEW
                 "project_signals" => $projectSignals,
                 "professional_signals" => $proSignals,
             ]

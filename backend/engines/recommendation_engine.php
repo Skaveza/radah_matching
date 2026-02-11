@@ -8,6 +8,7 @@ class RecommendationEngine
     {
         $description = $project["description"] ?? "";
         $signals = NLPExtractor::extractAllSignals($description);
+        $projectRegion = $project["region"] ?? null; // NEW
 
         $insights = [];
         $actions = [];
@@ -85,7 +86,15 @@ class RecommendationEngine
         }
 
         /* -----------------------------
-         * 5. ROLE NORMALIZATION
+         * 5. REGION-BASED INSIGHT (NEW)
+         * ----------------------------- */
+        if ($projectRegion) {
+            $insights[] = "Consider local resources in {$projectRegion} for faster execution and regional expertise.";
+            $actions[] = "Prioritize professionals based in {$projectRegion} when possible";
+        }
+
+        /* -----------------------------
+         * 6. ROLE NORMALIZATION
          * ----------------------------- */
         $roles = array_values(array_unique($roles));
 
@@ -95,7 +104,7 @@ class RecommendationEngine
         }
 
         /* -----------------------------
-         * 6. FINAL FOCUS MESSAGE
+         * 7. FINAL FOCUS MESSAGE
          * ----------------------------- */
         $focus = self::deriveFocusMessage($project, $signals);
 
