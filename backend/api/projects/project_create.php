@@ -33,9 +33,7 @@ function get_json_body(): array
 try {
     $data = get_json_body();
 
-    /* -----------------------------
-     * 1. REQUIRED FIELDS
-     * ----------------------------- */
+    // 1 Required fields
     $required = [
         "entrepreneur_id",
         "business_type",
@@ -45,7 +43,6 @@ try {
         "budget_range",
         "description"
     ];
-
     $missing = Validators::required($data, $required);
     if (!empty($missing)) {
         json_response([
@@ -55,9 +52,7 @@ try {
         ], 422);
     }
 
-    /* -----------------------------
-     * 2. ENUM VALIDATION
-     * ----------------------------- */
+    // 2 Enum validation
     Validators::assertInEnum($data["business_type"], EntrepreneurEnums::$BUSINESS_TYPES, "business_type");
     Validators::assertInEnum($data["project_stage"], EntrepreneurEnums::$PROJECT_STAGES, "project_stage");
     Validators::assertInEnum($data["industry"], EntrepreneurEnums::$INDUSTRIES, "industry");
@@ -66,9 +61,7 @@ try {
 
     $firestore = new FirestoreService();
 
-    /* -----------------------------
-     * 3. CHECK ENTREPRENEUR PLAN
-     * ----------------------------- */
+    // 3 Check entrepreneur plan & payment
     $entrepreneurId = trim($data["entrepreneur_id"]);
     $userDoc = $firestore->collection("users")->document($entrepreneurId)->snapshot();
 
@@ -99,9 +92,7 @@ try {
         ], 403);
     }
 
-    /* -----------------------------
-     * 4. NORMALIZE PROJECT DATA
-     * ----------------------------- */
+    // 4 Normalize project data
     $project = [
         "entrepreneur_id" => $entrepreneurId,
         "business_type" => trim($data["business_type"]),
@@ -114,37 +105,27 @@ try {
         "created_at" => date("c")
     ];
 
-    /* -----------------------------
-     * 5. SAVE PROJECT
-     * ----------------------------- */
+    // 5 Save project
     $projects = $firestore->collection("projects");
     $projectRef = $projects->add($project);
     $projectId = $projectRef->id();
 
-    /* -----------------------------
-     * 6. UPDATE ENTREPRENEUR PROJECT COUNT
-     * ----------------------------- */
+    // 6 Update project count
     $firestore->collection("users")->document($entrepreneurId)->update([
         ['path' => 'projects_created', 'value' => $projectsCreated + 1]
     ]);
 
-    /* -----------------------------
-     * 7. GENERATE RECOMMENDATIONS
-     * ----------------------------- */
+    // 7 Generate recommendations
     $recommendations = RecommendationEngine::generate($project);
 
-    /* -----------------------------
-     * 8. STORE RECOMMENDATIONS SNAPSHOT
-     * ----------------------------- */
+    // 8 Store recommendations snapshot
     $firestore->collection("project_recommendations")->add([
         "project_id" => $projectId,
         "recommendations" => $recommendations,
         "created_at" => date("c")
     ]);
 
-    /* -----------------------------
-     * 9. RESPONSE
-     * ----------------------------- */
+    // 9 Response
     json_response([
         "success" => true,
         "message" => "Project created",
