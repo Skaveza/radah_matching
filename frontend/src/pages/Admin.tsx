@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +25,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+
 import { toast } from "sonner";
 import {
   Loader2,
@@ -38,33 +41,42 @@ import {
   RefreshCw,
   AlertTriangle,
 } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+
 import { apiFetch } from "@/lib/api";
 import { auth } from "@/lib/firebase";
+
+type AnyRow = Record<string, any>;
 
 interface Application {
   id: string;
   name: string;
   email: string;
 
-  role: string;
-  experience: string;
-  industry: string;
+  primary_role?: string | null;
+  years_experience?: string | null;
+  industry_experience?: string[] | null;
 
-  portfolio: string | null;
-  linkedin: string | null;
+  portfolio_url?: string | null;
+  linkedin_url?: string | null;
 
-  rate_range: string;
-  availability: string;
-  summary: string;
+  hourly_rate_range?: string | null;
+  availability?: string | null;
+  professional_summary?: string | null;
 
-  status: string;
-  created_at: string;
+  approved?: boolean;
+  rejected?: boolean;
+  status?: string | null;
 
+  created_at?: string | null;
+  updated_at?: string | null;
+
+  // optional AI fields
   ai_vetting_status?: string | null;
   ai_vetting_score?: number | null;
   ai_vetting_notes?: string | null;
   ai_flagged_as_fake?: boolean | null;
+
+  rejection_reason?: string | null;
 }
 
 interface Professional {
@@ -72,12 +84,17 @@ interface Professional {
   name: string;
   email: string;
 
-  role: string;
-  experience: string;
-  industry: string;
+  primary_role?: string | null;
+  years_experience?: string | null;
+  industry_experience?: string[] | null;
 
-  is_available: boolean;
-  created_at: string;
+  hourly_rate_range?: string | null;
+  availability?: string | null;
+
+  status?: string | null;
+  approved?: boolean;
+
+  created_at?: string | null;
 }
 
 interface PurchasedTeam {
@@ -89,47 +106,56 @@ interface PurchasedTeam {
   professionals: any[];
 }
 
-type AnyRow = Record<string, any>;
-
 function normalizeApplication(r: AnyRow): Application {
   return {
-    id: String(r.id ?? r.application_id ?? r.uid ?? ""),
+    id: String(r.id ?? r.uid ?? ""),
     name: String(r.name ?? r.full_name ?? ""),
     email: String(r.email ?? ""),
 
-    role: String(r.role ?? r.primary_role ?? ""),
-    experience: String(r.experience ?? r.years_experience ?? ""),
-    industry: String(r.industry ?? ""),
+    primary_role: r.primary_role ?? null,
+    years_experience: r.years_experience ?? null,
+    industry_experience: Array.isArray(r.industry_experience) ? r.industry_experience : null,
 
-    portfolio: r.portfolio ?? null,
-    linkedin: r.linkedin ?? null,
+    portfolio_url: r.portfolio_url ?? r.portfolio ?? null,
+    linkedin_url: r.linkedin_url ?? r.linkedin ?? null,
 
-    rate_range: String(r.rate_range ?? r.hourly_rate_range ?? r.rate ?? ""),
-    availability: String(r.availability ?? ""),
-    summary: String(r.summary ?? r.professional_summary ?? ""),
+    hourly_rate_range: r.hourly_rate_range ?? r.rate_range ?? null,
+    availability: r.availability ?? null,
+    professional_summary: r.professional_summary ?? r.summary ?? null,
 
-    status: String(r.status ?? r.professional_status ?? "pending"),
-    created_at: String(r.created_at ?? new Date().toISOString()),
+    approved: typeof r.approved === "boolean" ? r.approved : undefined,
+    rejected: typeof r.rejected === "boolean" ? r.rejected : undefined,
+    status: r.status ?? null,
+
+    created_at: r.created_at ?? null,
+    updated_at: r.updated_at ?? null,
 
     ai_vetting_status: r.ai_vetting_status ?? null,
     ai_vetting_score: typeof r.ai_vetting_score === "number" ? r.ai_vetting_score : null,
     ai_vetting_notes: r.ai_vetting_notes ?? null,
     ai_flagged_as_fake: r.ai_flagged_as_fake ?? null,
+
+    rejection_reason: r.rejection_reason ?? null,
   };
 }
 
 function normalizeProfessional(r: AnyRow): Professional {
   return {
-    id: String(r.id ?? r.professional_id ?? r.uid ?? ""),
+    id: String(r.id ?? r.uid ?? ""),
     name: String(r.name ?? r.full_name ?? ""),
     email: String(r.email ?? ""),
 
-    role: String(r.role ?? r.primary_role ?? ""),
-    experience: String(r.experience ?? r.years_experience ?? ""),
-    industry: String(r.industry ?? ""),
+    primary_role: r.primary_role ?? null,
+    years_experience: r.years_experience ?? null,
+    industry_experience: Array.isArray(r.industry_experience) ? r.industry_experience : null,
 
-    is_available: Boolean(r.is_available ?? r.available ?? false),
-    created_at: String(r.created_at ?? new Date().toISOString()),
+    hourly_rate_range: r.hourly_rate_range ?? null,
+    availability: r.availability ?? null,
+
+    status: r.status ?? null,
+    approved: typeof r.approved === "boolean" ? r.approved : undefined,
+
+    created_at: r.created_at ?? null,
   };
 }
 
@@ -158,92 +184,81 @@ export default function Admin() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
+  const getAuthHeaders = async (): Promise<Record<string, string>> => {
+    const token = await auth.currentUser?.getIdToken().catch(() => null);
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
+  const unwrapList = (res: any): AnyRow[] => {
+    if (Array.isArray(res)) return res;
+    if (Array.isArray(res?.professionals)) return res.professionals;
+    if (Array.isArray(res?.data)) return res.data;
+    return [];
+  };
+
   const fetchData = async () => {
     setIsLoading(true);
-
     try {
-      const token = await auth.currentUser?.getIdToken().catch(() => null);
-      const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+      const authHeaders = await getAuthHeaders();
 
-      //  Pending applications
+      // Pending
       const pendingRes = await apiFetch<any>("/api/professionals/list-pending", {
         method: "GET",
         headers: authHeaders,
       });
+      setApplications(unwrapList(pendingRes).map(normalizeApplication));
 
-      const pendingList = Array.isArray(pendingRes)
-        ? pendingRes
-        : Array.isArray(pendingRes?.data)
-        ? pendingRes.data
-        : Array.isArray(pendingRes?.applications)
-        ? pendingRes.applications
-        : [];
-      setApplications(pendingList.map((r: AnyRow) => normalizeApplication(r)));
-
-      // Approved professionals
+      // Approved
       const approvedRes = await apiFetch<any>("/api/professionals/list-approved", {
         method: "GET",
         headers: authHeaders,
       });
+      setProfessionals(unwrapList(approvedRes).map(normalizeProfessional));
 
-      const approvedList = Array.isArray(approvedRes)
-        ? approvedRes
-        : Array.isArray(approvedRes?.data)
-        ? approvedRes.data
-        : Array.isArray(approvedRes?.professionals)
-        ? approvedRes.professionals
-        : [];
-      setProfessionals(approvedList.map((r: AnyRow) => normalizeProfessional(r)));
-
-      //  Purchased teams (optional; keep safe fallback)
+      // Purchased teams (optional)
       try {
         const teamsRes = await apiFetch<any>("/api/admin/purchased_teams_list", {
           method: "GET",
           headers: authHeaders,
         });
+
         const teamsList = Array.isArray(teamsRes)
           ? teamsRes
-          : Array.isArray(teamsRes?.data)
-          ? teamsRes.data
           : Array.isArray(teamsRes?.teams)
           ? teamsRes.teams
+          : Array.isArray(teamsRes?.data)
+          ? teamsRes.data
           : [];
+
         setPurchasedTeams(teamsList);
       } catch {
         setPurchasedTeams([]);
       }
     } catch (e: any) {
       console.error(e);
-      toast.error(e?.message || "Failed to load data");
+      toast.error(e?.message || "Failed to load admin data");
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleApprove = async () => {
-    if (!selectedApplication) return;
+    if (!selectedApplication?.id) return;
     setIsProcessing(true);
 
     try {
-      const token = await auth.currentUser?.getIdToken().catch(() => null);
+      const headers = await getAuthHeaders();
 
-      await apiFetch("/api/professionals/approve", {
+      await apiFetch(`/api/professionals/approve?uid=${encodeURIComponent(selectedApplication.id)}`, {
         method: "POST",
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          application_id: selectedApplication.id,
-          uid: selectedApplication.id, // fallback if backend expects uid
-        }),
+        headers,
       });
 
       toast.success(`${selectedApplication.name} approved`);
       await fetchData();
     } catch (e: any) {
       console.error(e);
-      toast.error(e?.message || "Failed to approve application");
+      toast.error(e?.message || "Failed to approve");
     } finally {
       setIsProcessing(false);
       setSelectedApplication(null);
@@ -252,30 +267,26 @@ export default function Admin() {
   };
 
   const handleReject = async () => {
-    if (!selectedApplication) return;
+    if (!selectedApplication?.id) return;
     setIsProcessing(true);
 
     try {
-      const token = await auth.currentUser?.getIdToken().catch(() => null);
+      const headers = await getAuthHeaders();
 
-      await apiFetch("/api/professionals/reject", {
+      await apiFetch(`/api/professionals/reject?uid=${encodeURIComponent(selectedApplication.id)}`, {
         method: "POST",
         headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...headers,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          application_id: selectedApplication.id,
-          uid: selectedApplication.id,
-          rejection_reason: rejectionReason || null,
-        }),
+        body: JSON.stringify({ rejection_reason: rejectionReason || "" }),
       });
 
       toast.success("Application rejected");
       await fetchData();
     } catch (e: any) {
       console.error(e);
-      toast.error(e?.message || "Failed to reject application");
+      toast.error(e?.message || "Failed to reject");
     } finally {
       setIsProcessing(false);
       setSelectedApplication(null);
@@ -284,15 +295,17 @@ export default function Admin() {
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "approved":
-        return <Badge className="bg-green-500/20 text-green-500">Approved</Badge>;
-      case "rejected":
-        return <Badge className="bg-red-500/20 text-red-500">Rejected</Badge>;
-      default:
-        return <Badge className="bg-yellow-500/20 text-yellow-500">Pending</Badge>;
+  const getStatusBadge = (app: Application) => {
+    if (app.rejected || app.status === "rejected") {
+      return <Badge className="bg-red-500/20 text-red-500">Rejected</Badge>;
     }
+    if (app.approved || app.status === "approved") {
+      return <Badge className="bg-green-500/20 text-green-500">Approved</Badge>;
+    }
+    if (app.status === "pending_review") {
+      return <Badge className="bg-yellow-500/20 text-yellow-500">Pending Review</Badge>;
+    }
+    return <Badge className="bg-yellow-500/20 text-yellow-500">Pending</Badge>;
   };
 
   const getAIVettingBadge = (app: Application) => {
@@ -301,11 +314,10 @@ export default function Admin() {
         <Tooltip>
           <TooltipTrigger>
             <Badge variant="outline" className="gap-1">
-              <Clock className="w-3 h-3" />
-              Analyzing...
+              <Clock className="w-3 h-3" />—
             </Badge>
           </TooltipTrigger>
-          <TooltipContent>AI vetting in progress</TooltipContent>
+          <TooltipContent>No AI vetting data</TooltipContent>
         </Tooltip>
       );
     }
@@ -320,7 +332,7 @@ export default function Admin() {
             </Badge>
           </TooltipTrigger>
           <TooltipContent className="max-w-xs">
-            <p className="font-semibold text-red-500">⚠ Flagged as potentially fake</p>
+            <p className="font-semibold text-red-500">⚠ Flagged</p>
             <p className="text-sm mt-1">{app.ai_vetting_notes}</p>
           </TooltipContent>
         </Tooltip>
@@ -336,7 +348,7 @@ export default function Admin() {
           </Badge>
         </TooltipTrigger>
         <TooltipContent className="max-w-xs">
-          <p className="font-semibold text-green-500">AI result: {app.ai_vetting_status}</p>
+          <p className="font-semibold text-green-500">AI: {app.ai_vetting_status}</p>
           <p className="text-sm mt-1">{app.ai_vetting_notes}</p>
         </TooltipContent>
       </Tooltip>
@@ -384,7 +396,9 @@ export default function Admin() {
           <CardContent className="pt-6 text-center">
             <XCircle className="w-12 h-12 mx-auto mb-4 text-destructive" />
             <h2 className="text-xl font-semibold mb-2">Access Denied</h2>
-            <p className="text-muted-foreground mb-4">You don’t have permission to access the admin panel.</p>
+            <p className="text-muted-foreground mb-4">
+              You don’t have permission to access the admin panel.
+            </p>
             <Button variant="outline" onClick={() => navigate("/")}>
               Back to Home
             </Button>
@@ -394,7 +408,7 @@ export default function Admin() {
     );
   }
 
-  const pendingCount = applications.filter((a) => a.status === "pending").length;
+  const pendingCount = applications.length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -409,6 +423,7 @@ export default function Admin() {
               <p className="text-sm text-muted-foreground">Radah Works Management</p>
             </div>
           </div>
+
           <div className="flex items-center gap-4">
             <Button variant="ghost" size="sm" onClick={fetchData}>
               <RefreshCw className="w-4 h-4 mr-2" />
@@ -423,7 +438,7 @@ export default function Admin() {
       </header>
 
       <main className="container mx-auto px-6 py-8">
-        <div className="grid md:grid-cols-4 gap-4 mb-8">
+        <div className="grid md:grid-cols-3 gap-4 mb-8">
           <Card>
             <CardContent className="pt-6">
               <div className="flex items-center gap-3">
@@ -446,7 +461,7 @@ export default function Admin() {
                 </div>
                 <div>
                   <p className="text-2xl font-bold">{professionals.length}</p>
-                  <p className="text-sm text-muted-foreground">Active Professionals</p>
+                  <p className="text-sm text-muted-foreground">Approved Professionals</p>
                 </div>
               </div>
             </CardContent>
@@ -465,27 +480,11 @@ export default function Admin() {
               </div>
             </CardContent>
           </Card>
-
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
-                  <CheckCircle className="w-5 h-5 text-purple-500" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold">
-                    {purchasedTeams.filter((t) => t.matched_status === "matched").length}
-                  </p>
-                  <p className="text-sm text-muted-foreground">Fully Matched</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
         </div>
 
         <Tabs defaultValue="applications">
           <TabsList className="mb-6">
-            <TabsTrigger value="applications">Applications ({pendingCount} pending)</TabsTrigger>
+            <TabsTrigger value="applications">Applications ({pendingCount})</TabsTrigger>
             <TabsTrigger value="professionals">Professionals ({professionals.length})</TabsTrigger>
             <TabsTrigger value="teams">Purchased Teams ({purchasedTeams.length})</TabsTrigger>
           </TabsList>
@@ -493,7 +492,7 @@ export default function Admin() {
           <TabsContent value="applications">
             <Card>
               <CardHeader>
-                <CardTitle>Professional Applications</CardTitle>
+                <CardTitle>Pending Professional Applications</CardTitle>
               </CardHeader>
               <CardContent>
                 {isLoading ? (
@@ -501,7 +500,7 @@ export default function Admin() {
                     <Loader2 className="w-6 h-6 animate-spin" />
                   </div>
                 ) : applications.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No applications yet</p>
+                  <p className="text-center text-muted-foreground py-8">No pending applications</p>
                 ) : (
                   <Table>
                     <TableHeader>
@@ -516,6 +515,7 @@ export default function Admin() {
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
+
                     <TableBody>
                       {applications.map((app) => (
                         <TableRow key={app.id} className={app.ai_flagged_as_fake ? "bg-red-500/5" : ""}>
@@ -525,49 +525,47 @@ export default function Admin() {
                               <p className="text-sm text-muted-foreground">{app.email}</p>
                             </div>
                           </TableCell>
-                          <TableCell>{app.role}</TableCell>
-                          <TableCell>{app.experience}</TableCell>
-                          <TableCell>{app.rate_range}</TableCell>
+                          <TableCell>{app.primary_role ?? "—"}</TableCell>
+                          <TableCell>{app.years_experience ?? "—"}</TableCell>
+                          <TableCell>{app.hourly_rate_range ?? "—"}</TableCell>
                           <TableCell>{getAIVettingBadge(app)}</TableCell>
-                          <TableCell>{getStatusBadge(app.status)}</TableCell>
-                          <TableCell>{new Date(app.created_at).toLocaleDateString()}</TableCell>
+                          <TableCell>{getStatusBadge(app)}</TableCell>
+                          <TableCell>
+                            {app.created_at ? new Date(app.created_at).toLocaleDateString() : "—"}
+                          </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              {app.linkedin && (
+                              {app.linkedin_url && (
                                 <Button variant="ghost" size="sm" asChild>
-                                  <a href={app.linkedin} target="_blank" rel="noopener noreferrer">
+                                  <a href={app.linkedin_url} target="_blank" rel="noopener noreferrer">
                                     <ExternalLink className="w-4 h-4" />
                                   </a>
                                 </Button>
                               )}
 
-                              {app.status === "pending" && (
-                                <>
-                                  <Button
-                                    variant="default"
-                                    size="sm"
-                                    onClick={() => {
-                                      setSelectedApplication(app);
-                                      setActionType("approve");
-                                    }}
-                                  >
-                                    <CheckCircle className="w-4 h-4 mr-1" />
-                                    Approve
-                                  </Button>
+                              <Button
+                                variant="default"
+                                size="sm"
+                                onClick={() => {
+                                  setSelectedApplication(app);
+                                  setActionType("approve");
+                                }}
+                              >
+                                <CheckCircle className="w-4 h-4 mr-1" />
+                                Approve
+                              </Button>
 
-                                  <Button
-                                    variant="destructive"
-                                    size="sm"
-                                    onClick={() => {
-                                      setSelectedApplication(app);
-                                      setActionType("reject");
-                                    }}
-                                  >
-                                    <XCircle className="w-4 h-4 mr-1" />
-                                    Reject
-                                  </Button>
-                                </>
-                              )}
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => {
+                                  setSelectedApplication(app);
+                                  setActionType("reject");
+                                }}
+                              >
+                                <XCircle className="w-4 h-4 mr-1" />
+                                Reject
+                              </Button>
                             </div>
                           </TableCell>
                         </TableRow>
@@ -582,7 +580,7 @@ export default function Admin() {
           <TabsContent value="professionals">
             <Card>
               <CardHeader>
-                <CardTitle>Active Professionals</CardTitle>
+                <CardTitle>Approved Professionals</CardTitle>
               </CardHeader>
               <CardContent>
                 {isLoading ? (
@@ -590,7 +588,9 @@ export default function Admin() {
                     <Loader2 className="w-6 h-6 animate-spin" />
                   </div>
                 ) : professionals.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No professionals approved yet</p>
+                  <p className="text-center text-muted-foreground py-8">
+                    No professionals found (check list-approved query vs approve fields).
+                  </p>
                 ) : (
                   <Table>
                     <TableHeader>
@@ -598,8 +598,8 @@ export default function Admin() {
                         <TableHead>Name</TableHead>
                         <TableHead>Role</TableHead>
                         <TableHead>Experience</TableHead>
-                        <TableHead>Industry</TableHead>
-                        <TableHead>Available</TableHead>
+                        <TableHead>Rate</TableHead>
+                        <TableHead>Availability</TableHead>
                         <TableHead>Added</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -612,17 +612,13 @@ export default function Admin() {
                               <p className="text-sm text-muted-foreground">{pro.email}</p>
                             </div>
                           </TableCell>
-                          <TableCell>{pro.role}</TableCell>
-                          <TableCell>{pro.experience}</TableCell>
-                          <TableCell>{pro.industry}</TableCell>
+                          <TableCell>{pro.primary_role ?? "—"}</TableCell>
+                          <TableCell>{pro.years_experience ?? "—"}</TableCell>
+                          <TableCell>{pro.hourly_rate_range ?? "—"}</TableCell>
+                          <TableCell>{pro.availability ?? "—"}</TableCell>
                           <TableCell>
-                            {pro.is_available ? (
-                              <Badge className="bg-green-500/20 text-green-500">Available</Badge>
-                            ) : (
-                              <Badge className="bg-gray-500/20 text-gray-500">Unavailable</Badge>
-                            )}
+                            {pro.created_at ? new Date(pro.created_at).toLocaleDateString() : "—"}
                           </TableCell>
-                          <TableCell>{new Date(pro.created_at).toLocaleDateString()}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -643,9 +639,7 @@ export default function Admin() {
                     <Loader2 className="w-6 h-6 animate-spin" />
                   </div>
                 ) : purchasedTeams.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">
-                    No purchases yet (endpoint not connected)
-                  </p>
+                  <p className="text-center text-muted-foreground py-8">No purchases yet</p>
                 ) : (
                   <Table>
                     <TableHeader>
@@ -662,7 +656,7 @@ export default function Admin() {
                         <TableRow key={team.id}>
                           <TableCell className="font-medium">{team.team_name}</TableCell>
                           <TableCell>{team.customer_email}</TableCell>
-                          <TableCell>{Array.isArray(team.professionals) ? team.professionals.length : 0} roles</TableCell>
+                          <TableCell>{Array.isArray(team.professionals) ? team.professionals.length : 0}</TableCell>
                           <TableCell>{getMatchStatusBadge(team.matched_status)}</TableCell>
                           <TableCell>{new Date(team.created_at).toLocaleDateString()}</TableCell>
                         </TableRow>
@@ -706,7 +700,13 @@ export default function Admin() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Reject Application</AlertDialogTitle>
-            <AlertDialogDescription>Reject {selectedApplication?.name}?</AlertDialogDescription>
+            <AlertDialogDescription>
+              Reject {selectedApplication?.name}?
+              <br />
+              <span className="text-xs text-muted-foreground">
+                Reason is optional (stored only if your PHP saves it).
+              </span>
+            </AlertDialogDescription>
           </AlertDialogHeader>
 
           <div className="py-4">
