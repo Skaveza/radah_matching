@@ -24,16 +24,24 @@ if (!$proSnap->exists()) json_response(["success"=>false,"error"=>"Professional 
 
 $now = date("c");
 
-$firestore->collection("professionals")->document($uid)->set([
+// optional reason support (your frontend already has it)
+$body = json_decode(file_get_contents("php://input"), true);
+$reason = is_array($body) ? trim((string)($body["rejection_reason"] ?? "")) : "";
+
+$update = [
   "approved" => false,
   "rejected" => true,
+  "status" => "rejected",       // ✅ ADD
   "rejected_at" => $now,
   "updated_at" => $now
-], ["merge" => true]);
+];
+if ($reason !== "") $update["rejection_reason"] = $reason;
+
+$firestore->collection("professionals")->document($uid)->set($update, ["merge" => true]);
 
 $firestore->collection("users")->document($uid)->set([
   "professional_status" => "rejected",
   "updated_at" => $now
 ], ["merge" => true]);
 
-json_response(["success"=>true,"uid"=>$uid,"approved"=>false,"rejected"=>true]);
+json_response(["success"=>true,"uid"=>$uid,"status"=>"rejected"]);

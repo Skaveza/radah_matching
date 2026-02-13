@@ -1,7 +1,7 @@
 <?php
 // TF-IDF for text similarity
 
-require __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/../bootstrap.php';
 
 class TFIDF
 {

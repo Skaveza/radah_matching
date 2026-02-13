@@ -17,14 +17,13 @@ $mw->verifyToken(["admin"]);
 $firestore = new FirestoreService();
 
 $docs = $firestore->collection("professionals")
-  ->where("approved", "=", false)
+  ->where("status", "==", "pending")
   ->documents();
 
 $results = [];
 foreach ($docs as $d) {
   if (!$d->exists()) continue;
   $row = $d->data();
-  if (($row["rejected"] ?? false) === true) continue; // hide rejected from pending
   $row["id"] = $d->id();
   $results[] = $row;
 }

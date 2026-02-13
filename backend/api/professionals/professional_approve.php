@@ -12,7 +12,7 @@ function json_response($data, int $code = 200) {
 }
 
 $mw = new FirebaseMiddlewareV2();
-$mw->verifyToken(["admin"]); // IMPORTANT: admin only
+$mw->verifyToken(["admin"]); // admin only
 
 $uid = $_GET["uid"] ?? null;
 if (!$uid) json_response(["success"=>false,"error"=>"Missing uid"], 400);
@@ -26,6 +26,8 @@ $now = date("c");
 
 $firestore->collection("professionals")->document($uid)->set([
   "approved" => true,
+  "rejected" => false,
+  "status" => "approved",      // ✅ ADD
   "approved_at" => $now,
   "updated_at" => $now
 ], ["merge" => true]);
@@ -35,4 +37,4 @@ $firestore->collection("users")->document($uid)->set([
   "updated_at" => $now
 ], ["merge" => true]);
 
-json_response(["success"=>true,"uid"=>$uid,"approved"=>true]);
+json_response(["success"=>true,"uid"=>$uid,"status"=>"approved"]);
