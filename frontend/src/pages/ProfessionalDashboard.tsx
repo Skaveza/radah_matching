@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { supabase } from "@/integrations/supabase/client";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,7 +11,20 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Loader2, User, FileText, History, Settings, LogOut, CheckCircle, Clock, XCircle, AlertCircle } from "lucide-react";
+import {
+  Loader2,
+  User as UserIcon,
+  FileText,
+  History,
+  Settings,
+  LogOut,
+  CheckCircle,
+  Clock,
+  XCircle,
+  AlertCircle,
+} from "lucide-react";
+import { apiFetch } from "@/lib/api";
+import { auth } from "@/lib/firebase";
 
 interface Professional {
   id: string;
@@ -40,25 +52,47 @@ interface Application {
   created_at: string;
 }
 
-interface Match {
-  id: string;
-  role_matched: string;
-  created_at: string;
-  notification_sent: boolean;
-  professional_responded: boolean;
-  purchased_team_id: string;
+type AnyRow = Record<string, any>;
+
+function normalizeApp(row: AnyRow): Application {
+  return {
+    id: String(row.id ?? row.application_id ?? row.app_id ?? ""),
+    name: String(row.name ?? ""),
+    email: String(row.email ?? ""),
+    role: String(row.role ?? row.primary_role ?? ""),
+    status: String(row.status ?? "pending"),
+    rejection_reason: row.rejection_reason ?? row.reason ?? null,
+    created_at: String(row.created_at ?? row.submitted_at ?? new Date().toISOString()),
+  };
 }
 
-const ProfessionalDashboard = () => {
+function normalizeProfessional(row: AnyRow): Professional {
+  return {
+    id: String(row.id ?? row.professional_id ?? ""),
+    name: String(row.name ?? ""),
+    email: String(row.email ?? ""),
+    role: String(row.role ?? ""),
+    experience: String(row.experience ?? row.years_experience ?? ""),
+    industry: String(row.industry ?? ""),
+    summary: String(row.summary ?? ""),
+    rate_range: String(row.rate_range ?? ""),
+    availability: String(row.availability ?? ""),
+    is_available: Boolean(row.is_available ?? row.available ?? false),
+    linkedin: row.linkedin ?? null,
+    portfolio: row.portfolio ?? null,
+    phone: row.phone ?? null,
+  };
+}
+
+export default function ProfessionalDashboard() {
   const { user, loading: authLoading, signOut } = useAuth();
   const navigate = useNavigate();
+
   const [loading, setLoading] = useState(true);
   const [professional, setProfessional] = useState<Professional | null>(null);
   const [applications, setApplications] = useState<Application[]>([]);
-  const [matches, setMatches] = useState<Match[]>([]);
   const [saving, setSaving] = useState(false);
 
-  // Profile form state
   const [formData, setFormData] = useState({
     summary: "",
     rate_range: "",
@@ -74,106 +108,117 @@ const ProfessionalDashboard = () => {
     }
   }, [user, authLoading, navigate]);
 
-  useEffect(() => {
-    if (user) {
-      fetchProfessionalData();
-    }
-  }, [user]);
+  const userEmail = user?.email || "";
 
   const fetchProfessionalData = async () => {
+    if (!userEmail) return;
+
     try {
       setLoading(true);
 
-      // Fetch professional profile by user_id first
-      let { data: profData, error: profError } = await supabase
-        .from("professionals")
-        .select("*")
-        .eq("user_id", user?.id)
-        .maybeSingle();
+      const token = await auth.currentUser?.getIdToken().catch(() => null);
 
-      if (profError) throw profError;
+      // 1) Try to find approved professional by email
+      let prof: Professional | null = null;
+      try {
+        const res = await apiFetch<any>("/api/professionals/professionals_list_approved", {
+          method: "GET",
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
 
-      // If no profile found by user_id, check if there's one by email that needs linking
-      if (!profData && user?.email) {
-        const { data: unlinkedProf, error: unlinkError } = await supabase
-          .from("professionals")
-          .select("*")
-          .eq("email", user.email)
-          .is("user_id", null)
-          .maybeSingle();
+        const list = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : Array.isArray(res?.professionals) ? res.professionals : [];
+        const found = list.find((r: AnyRow) => String(r.email || "").toLowerCase() === userEmail.toLowerCase());
+        if (found) prof = normalizeProfessional(found);
+      } catch {
+        // ignore, fallback below
+      }
 
-        if (unlinkError) throw unlinkError;
+      // 2) Applications: try professionals_list (assumed includes applications)
+      let apps: Application[] = [];
+      try {
+        const res = await apiFetch<any>("/api/professionals/professionals_list", {
+          method: "GET",
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
 
-        // If found, link it to this user
-        if (unlinkedProf) {
-          const { error: linkError } = await supabase
-            .from("professionals")
-            .update({ user_id: user.id })
-            .eq("id", unlinkedProf.id);
+        const list = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : Array.isArray(res?.applications) ? res.applications : [];
+        apps = list
+          .map((r: AnyRow) => normalizeApp(r))
+          .filter((a: Application) => (a.email || "").toLowerCase() === userEmail.toLowerCase())
+          .sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
+      } catch {
+        // Fallback: pending list only
+        try {
+          const res = await apiFetch<any>("/api/professionals/professionals_list_pending", {
+            method: "GET",
+            headers: {
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+          });
 
-          if (linkError) throw linkError;
-
-          profData = { ...unlinkedProf, user_id: user.id };
+          const list = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : Array.isArray(res?.applications) ? res.applications : [];
+          apps = list
+            .map((r: AnyRow) => normalizeApp(r))
+            .filter((a: Application) => (a.email || "").toLowerCase() === userEmail.toLowerCase())
+            .sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
+        } catch {
+          apps = [];
         }
       }
 
-      if (profData) {
-        setProfessional(profData);
+      setProfessional(prof);
+      setApplications(apps);
+
+      if (prof) {
         setFormData({
-          summary: profData.summary || "",
-          rate_range: profData.rate_range || "",
-          availability: profData.availability || "",
-          linkedin: profData.linkedin || "",
-          portfolio: profData.portfolio || "",
-          phone: profData.phone || "",
+          summary: prof.summary || "",
+          rate_range: prof.rate_range || "",
+          availability: prof.availability || "",
+          linkedin: prof.linkedin || "",
+          portfolio: prof.portfolio || "",
+          phone: prof.phone || "",
         });
       }
-
-      // Fetch applications by email
-      const { data: appData, error: appError } = await supabase
-        .from("professional_applications")
-        .select("*")
-        .eq("email", user?.email)
-        .order("created_at", { ascending: false });
-
-      if (appError) throw appError;
-      setApplications(appData || []);
-
-      // Fetch matches if professional exists
-      if (profData) {
-        const { data: matchData, error: matchError } = await supabase
-          .from("professional_matches")
-          .select("*")
-          .eq("professional_id", profData.id)
-          .order("created_at", { ascending: false });
-
-        if (matchError) throw matchError;
-        setMatches(matchData || []);
-      }
-    } catch (error) {
-      console.error("Error fetching data:", error);
+    } catch (e) {
+      console.error(e);
       toast.error("Failed to load your data");
     } finally {
       setLoading(false);
     }
   };
 
+  useEffect(() => {
+    if (userEmail) fetchProfessionalData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userEmail]);
+
   const handleAvailabilityToggle = async (checked: boolean) => {
     if (!professional) return;
 
     try {
-      const { error } = await supabase
-        .from("professionals")
-        .update({ is_available: checked })
-        .eq("id", professional.id);
+      const token = await auth.currentUser?.getIdToken().catch(() => null);
 
-      if (error) throw error;
+      await apiFetch("/api/professionals/professional_update", {
+        method: "POST",
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          id: professional.id,
+          is_available: checked ? 1 : 0,
+        }),
+      });
 
       setProfessional({ ...professional, is_available: checked });
       toast.success(checked ? "You are now available for matches" : "You are now unavailable for matches");
-    } catch (error) {
-      console.error("Error updating availability:", error);
-      toast.error("Failed to update availability");
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message || "Failed to update availability");
     }
   };
 
@@ -183,25 +228,39 @@ const ProfessionalDashboard = () => {
 
     try {
       setSaving(true);
-      const { error } = await supabase
-        .from("professionals")
-        .update({
+      const token = await auth.currentUser?.getIdToken().catch(() => null);
+
+      await apiFetch("/api/professionals/professional_update", {
+        method: "POST",
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          id: professional.id,
           summary: formData.summary,
           rate_range: formData.rate_range,
           availability: formData.availability,
           linkedin: formData.linkedin || null,
           portfolio: formData.portfolio || null,
           phone: formData.phone || null,
-        })
-        .eq("id", professional.id);
+        }),
+      });
 
-      if (error) throw error;
+      setProfessional({
+        ...professional,
+        summary: formData.summary,
+        rate_range: formData.rate_range,
+        availability: formData.availability,
+        linkedin: formData.linkedin || null,
+        portfolio: formData.portfolio || null,
+        phone: formData.phone || null,
+      });
 
-      setProfessional({ ...professional, ...formData });
       toast.success("Profile updated successfully");
-    } catch (error) {
-      console.error("Error updating profile:", error);
-      toast.error("Failed to update profile");
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message || "Failed to update profile");
     } finally {
       setSaving(false);
     }
@@ -215,15 +274,33 @@ const ProfessionalDashboard = () => {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "approved":
-        return <Badge className="bg-green-500/10 text-green-500 border-green-500/20"><CheckCircle className="w-3 h-3 mr-1" /> Approved</Badge>;
+        return (
+          <Badge className="bg-green-500/10 text-green-500 border-green-500/20">
+            <CheckCircle className="w-3 h-3 mr-1" /> Approved
+          </Badge>
+        );
       case "pending":
-        return <Badge className="bg-yellow-500/10 text-yellow-500 border-yellow-500/20"><Clock className="w-3 h-3 mr-1" /> Pending</Badge>;
+        return (
+          <Badge className="bg-yellow-500/10 text-yellow-500 border-yellow-500/20">
+            <Clock className="w-3 h-3 mr-1" /> Pending
+          </Badge>
+        );
       case "rejected":
-        return <Badge className="bg-red-500/10 text-red-500 border-red-500/20"><XCircle className="w-3 h-3 mr-1" /> Rejected</Badge>;
+        return (
+          <Badge className="bg-red-500/10 text-red-500 border-red-500/20">
+            <XCircle className="w-3 h-3 mr-1" /> Rejected
+          </Badge>
+        );
       default:
-        return <Badge variant="outline"><AlertCircle className="w-3 h-3 mr-1" /> {status}</Badge>;
+        return (
+          <Badge variant="outline">
+            <AlertCircle className="w-3 h-3 mr-1" /> {status}
+          </Badge>
+        );
     }
   };
+
+  const defaultTab = useMemo(() => (professional ? "profile" : "applications"), [professional]);
 
   if (authLoading || loading) {
     return (
@@ -235,12 +312,11 @@ const ProfessionalDashboard = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-foreground">Professional Dashboard</h1>
-            <p className="text-sm text-muted-foreground">{user?.email}</p>
+            <p className="text-sm text-muted-foreground">{userEmail}</p>
           </div>
           <Button variant="outline" onClick={handleSignOut}>
             <LogOut className="w-4 h-4 mr-2" />
@@ -255,27 +331,25 @@ const ProfessionalDashboard = () => {
             <CardHeader>
               <CardTitle>No Profile Found</CardTitle>
               <CardDescription>
-                You don't have a professional profile yet. Apply to become a Radah professional.
+                You don’t have a professional profile yet. Apply to become a Radah professional.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <Button onClick={() => navigate("/apply")}>
-                Apply Now
-              </Button>
+              <Button onClick={() => navigate("/professional-apply")}>Apply Now</Button>
             </CardContent>
           </Card>
         ) : (
-          <Tabs defaultValue={professional ? "profile" : "applications"} className="space-y-6">
+          <Tabs defaultValue={defaultTab} className="space-y-6">
             <TabsList className="grid w-full grid-cols-4 lg:w-auto lg:inline-grid">
               <TabsTrigger value="profile" disabled={!professional}>
-                <User className="w-4 h-4 mr-2" />
+                <UserIcon className="w-4 h-4 mr-2" />
                 Profile
               </TabsTrigger>
               <TabsTrigger value="applications">
                 <FileText className="w-4 h-4 mr-2" />
                 Applications
               </TabsTrigger>
-              <TabsTrigger value="matches" disabled={!professional}>
+              <TabsTrigger value="matches" disabled>
                 <History className="w-4 h-4 mr-2" />
                 Matches
               </TabsTrigger>
@@ -285,7 +359,6 @@ const ProfessionalDashboard = () => {
               </TabsTrigger>
             </TabsList>
 
-            {/* Profile Tab */}
             <TabsContent value="profile">
               {professional && (
                 <div className="grid gap-6 md:grid-cols-2">
@@ -308,6 +381,7 @@ const ProfessionalDashboard = () => {
                           <Label>Role</Label>
                           <Input value={professional.role} disabled className="bg-muted" />
                         </div>
+
                         <div className="space-y-2">
                           <Label htmlFor="summary">Professional Summary</Label>
                           <Textarea
@@ -317,6 +391,7 @@ const ProfessionalDashboard = () => {
                             rows={4}
                           />
                         </div>
+
                         <div className="space-y-2">
                           <Label htmlFor="rate_range">Rate Range</Label>
                           <Select
@@ -335,6 +410,7 @@ const ProfessionalDashboard = () => {
                             </SelectContent>
                           </Select>
                         </div>
+
                         <Button type="submit" disabled={saving}>
                           {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                           Save Changes
@@ -400,7 +476,6 @@ const ProfessionalDashboard = () => {
               )}
             </TabsContent>
 
-            {/* Applications Tab */}
             <TabsContent value="applications">
               <Card>
                 <CardHeader>
@@ -412,7 +487,7 @@ const ProfessionalDashboard = () => {
                     <div className="text-center py-8 text-muted-foreground">
                       <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
                       <p>No applications found</p>
-                      <Button variant="outline" className="mt-4" onClick={() => navigate("/apply")}>
+                      <Button variant="outline" className="mt-4" onClick={() => navigate("/professional-apply")}>
                         Submit Application
                       </Button>
                     </div>
@@ -426,9 +501,7 @@ const ProfessionalDashboard = () => {
                               Submitted {new Date(app.created_at).toLocaleDateString()}
                             </p>
                             {app.rejection_reason && (
-                              <p className="text-sm text-red-500 mt-1">
-                                Reason: {app.rejection_reason}
-                              </p>
+                              <p className="text-sm text-red-500 mt-1">Reason: {app.rejection_reason}</p>
                             )}
                           </div>
                           {getStatusBadge(app.status)}
@@ -440,48 +513,18 @@ const ProfessionalDashboard = () => {
               </Card>
             </TabsContent>
 
-            {/* Matches Tab */}
             <TabsContent value="matches">
               <Card>
                 <CardHeader>
                   <CardTitle>Match History</CardTitle>
-                  <CardDescription>View your project matches and opportunities</CardDescription>
+                  <CardDescription>Not wired yet (no PHP endpoint provided)</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  {matches.length === 0 ? (
-                    <div className="text-center py-8 text-muted-foreground">
-                      <History className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                      <p>No matches yet</p>
-                      <p className="text-sm mt-2">You'll see your project matches here when founders select you</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {matches.map((match) => (
-                        <div key={match.id} className="flex items-center justify-between p-4 border rounded-lg">
-                          <div>
-                            <p className="font-medium">{match.role_matched}</p>
-                            <p className="text-sm text-muted-foreground">
-                              Matched {new Date(match.created_at).toLocaleDateString()}
-                            </p>
-                          </div>
-                          <div className="flex gap-2">
-                            {match.notification_sent ? (
-                              <Badge variant="outline" className="bg-green-500/10 text-green-500">
-                                <CheckCircle className="w-3 h-3 mr-1" /> Notified
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline">Pending</Badge>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                <CardContent className="text-sm text-muted-foreground">
+                  Once you add an endpoint like <code>/api/professionals/matches</code>, we’ll plug it in here.
                 </CardContent>
               </Card>
             </TabsContent>
 
-            {/* Settings Tab */}
             <TabsContent value="settings">
               {professional && (
                 <Card>
@@ -497,31 +540,7 @@ const ProfessionalDashboard = () => {
                           When enabled, you can be matched with new projects
                         </p>
                       </div>
-                      <Switch
-                        checked={professional.is_available}
-                        onCheckedChange={handleAvailabilityToggle}
-                      />
-                    </div>
-                    <div className="p-4 border rounded-lg bg-muted/50">
-                      <h4 className="font-medium mb-2">Current Status</h4>
-                      <div className="grid gap-2 text-sm">
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Role:</span>
-                          <span>{professional.role}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Industry:</span>
-                          <span>{professional.industry}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Experience:</span>
-                          <span>{professional.experience}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Total Matches:</span>
-                          <span>{matches.length}</span>
-                        </div>
-                      </div>
+                      <Switch checked={professional.is_available} onCheckedChange={handleAvailabilityToggle} />
                     </div>
                   </CardContent>
                 </Card>
@@ -532,6 +551,4 @@ const ProfessionalDashboard = () => {
       </main>
     </div>
   );
-};
-
-export default ProfessionalDashboard;
+}

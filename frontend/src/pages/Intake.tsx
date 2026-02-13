@@ -1,14 +1,16 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, ArrowRight, Sparkles } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { ArrowLeft, ArrowRight, Sparkles, Loader2 } from "lucide-react";
 import Header from "@/components/landing/Header";
 import IntakeProgress from "@/components/intake/IntakeProgress";
 import IntakeStepOne from "@/components/intake/IntakeStepOne";
 import IntakeStepTwo from "@/components/intake/IntakeStepTwo";
 import IntakeStepThree from "@/components/intake/IntakeStepThree";
 import IntakeStepFour from "@/components/intake/IntakeStepFour";
+import { toast } from "sonner";
+import { apiFetch } from "@/lib/api";
+import { auth } from "@/lib/firebase";
 
 interface IntakeData {
   businessType: string;
@@ -19,9 +21,19 @@ interface IntakeData {
   description: string;
 }
 
+type CreateProjectResponse = {
+  success?: boolean;
+  project_id?: string;
+  id?: string;
+  project?: any;
+  error?: string;
+};
+
 const Intake = () => {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+
   const [data, setData] = useState<IntakeData>({
     businessType: "",
     projectStage: "",
@@ -40,45 +52,72 @@ const Intake = () => {
       case 2:
         return data.industry !== "" && data.timeline !== "" && data.budget !== "";
       case 3:
-        return data.description.length >= 50;
+        return data.description.trim().length >= 50;
       default:
         return false;
     }
   };
 
+  const updateField = (field: keyof IntakeData, value: string) => {
+    setData({ ...data, [field]: value });
+  };
+
   const handleNext = async () => {
     if (currentStep < 3) {
-      setCurrentStep(currentStep + 1);
-    } else {
-      // Store data and navigate to team generation
-      localStorage.setItem("intakeData", JSON.stringify(data));
+      setCurrentStep((s) => s + 1);
+      return;
+    }
 
-      // Persist to database (best-effort, non-blocking)
-      const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-      const { data: userData } = await supabase.auth.getUser();
-      supabase.from("intake_submissions").insert({
-        session_id: sessionId,
-        user_id: userData?.user?.id || null,
+    // Final submit
+    if (submitting) return;
+    if (!canProceed()) return;
+
+    try {
+      setSubmitting(true);
+
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error("Missing auth token. Please log in again.");
+
+      // Map intake fields to backend schema
+      const payload = {
         business_type: data.businessType,
         project_stage: data.projectStage,
         industry: data.industry,
         timeline: data.timeline,
-        budget: data.budget,
+        budget_range: data.budget,
         description: data.description,
-      }).then(() => {});
+      };
 
-      navigate("/team-builder");
+      const res = await apiFetch<CreateProjectResponse>("/api/projects", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const projectId = res.project_id || res.id || res.project?.project_id || res.project?.id;
+
+      if (!projectId) {
+        throw new Error("Project created, but no project id was returned by the API.");
+      }
+
+      // Keep for Team Builder + fallback UI
+      localStorage.setItem("activeProjectId", projectId);
+      localStorage.setItem("intakeData", JSON.stringify(data));
+
+      toast.success("Project created. Generating your team...");
+      navigate(`/team-builder?projectId=${encodeURIComponent(projectId)}`);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to create project");
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const handleBack = () => {
-    if (currentStep > 0) {
-      setCurrentStep(currentStep - 1);
-    }
-  };
-
-  const updateField = (field: keyof IntakeData, value: string) => {
-    setData({ ...data, [field]: value });
+    if (currentStep > 0) setCurrentStep((s) => s - 1);
   };
 
   return (
@@ -95,12 +134,14 @@ const Intake = () => {
                 onChange={(v) => updateField("businessType", v)}
               />
             )}
+
             {currentStep === 1 && (
               <IntakeStepTwo
                 value={data.projectStage}
                 onChange={(v) => updateField("projectStage", v)}
               />
             )}
+
             {currentStep === 2 && (
               <IntakeStepThree
                 data={{
@@ -111,6 +152,7 @@ const Intake = () => {
                 onChange={(field, value) => updateField(field as keyof IntakeData, value)}
               />
             )}
+
             {currentStep === 3 && (
               <IntakeStepFour
                 value={data.description}
@@ -122,7 +164,7 @@ const Intake = () => {
               <Button
                 variant="ghost"
                 onClick={handleBack}
-                disabled={currentStep === 0}
+                disabled={currentStep === 0 || submitting}
                 className="gap-2"
               >
                 <ArrowLeft className="w-4 h-4" />
@@ -133,10 +175,15 @@ const Intake = () => {
                 variant={currentStep === 3 ? "premium" : "default"}
                 size="lg"
                 onClick={handleNext}
-                disabled={!canProceed()}
+                disabled={!canProceed() || submitting}
                 className="gap-2"
               >
-                {currentStep === 3 ? (
+                {submitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Creating...
+                  </>
+                ) : currentStep === 3 ? (
                   <>
                     <Sparkles className="w-4 h-4" />
                     Generate My Team

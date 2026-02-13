@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, ArrowRight, Mail, Linkedin, Phone, ExternalLink, Loader2 } from "lucide-react";
+import {
+  CheckCircle2,
+  ArrowRight,
+  Mail,
+  Linkedin,
+  Phone,
+  ExternalLink,
+  Loader2,
+} from "lucide-react";
 import Header from "@/components/landing/Header";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { apiFetch } from "@/lib/api";
+import { auth } from "@/lib/firebase";
 
 interface UnlockedProfessional {
   roleTitle: string;
@@ -15,89 +24,77 @@ interface UnlockedProfessional {
   portfolio?: string | null;
 }
 
-const PaymentSuccess = () => {
+interface VerifyResponse {
+  success: boolean;
+  teamName?: string;
+  professionals?: UnlockedProfessional[];
+  message?: string;
+}
+
+export default function PaymentSuccess() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [professionals, setProfessionals] = useState<UnlockedProfessional[]>([]);
-  const [teamName, setTeamName] = useState<string>("");
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const sessionId = searchParams.get("session_id");
 
+  const [professionals, setProfessionals] = useState<UnlockedProfessional[]>([]);
+  const [teamName, setTeamName] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
-    const verifyPayment = async () => {
+    const verify = async () => {
       if (!sessionId) {
-        setError("No session ID found");
-        setIsLoading(false);
+        setError("Missing session ID.");
+        setLoading(false);
         return;
       }
 
       try {
-        console.log("Verifying payment for session:", sessionId);
-        
-        const { data, error: fnError } = await supabase.functions.invoke("verify-payment", {
-          body: { sessionId },
+        const token = await auth.currentUser?.getIdToken();
+        if (!token) throw new Error("Authentication required.");
+
+        const res = await apiFetch<VerifyResponse>("/api/payments/verify", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ session_id: sessionId }),
         });
 
-        if (fnError) {
-          throw fnError;
-        }
+        if (!res.success) throw new Error(res.message || "Verification failed.");
 
-        if (data?.success) {
-          setProfessionals(data.professionals || []);
-          setTeamName(data.teamName || "Your Team");
-          toast.success("Team contacts unlocked! Check your email for a copy.");
-        } else {
-          throw new Error(data?.error || "Verification failed");
-        }
-      } catch (err) {
-        console.error("Payment verification error:", err);
-        setError("Unable to verify payment. Please contact support.");
-        toast.error("Payment verification failed");
+        setProfessionals(res.professionals || []);
+        setTeamName(res.teamName || "Your Team");
+        toast.success("Team unlocked successfully!");
+      } catch (err: any) {
+        console.error(err);
+        setError(err.message || "Payment verification failed.");
+        toast.error("Payment verification failed.");
       } finally {
-        setIsLoading(false);
+        setLoading(false);
       }
     };
 
-    verifyPayment();
+    verify();
   }, [sessionId]);
 
-  if (isLoading) {
+  if (loading) {
     return (
-      <div className="min-h-screen bg-background">
-        <Header />
-        <main className="pt-32 pb-20">
-          <div className="container mx-auto px-6">
-            <div className="max-w-4xl mx-auto text-center">
-              <Loader2 className="w-12 h-12 animate-spin mx-auto mb-4 text-primary" />
-              <h1 className="font-display text-2xl font-bold text-foreground">
-                Verifying your payment...
-              </h1>
-              <p className="text-muted-foreground mt-2">
-                Please wait while we unlock your team contacts.
-              </p>
-            </div>
-          </div>
-        </main>
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-background">
-        <Header />
-        <main className="pt-32 pb-20">
-          <div className="container mx-auto px-6">
-            <div className="max-w-4xl mx-auto text-center">
-              <h1 className="font-display text-2xl font-bold text-foreground mb-4">
-                Something went wrong
-              </h1>
-              <p className="text-muted-foreground mb-6">{error}</p>
-              <Button onClick={() => navigate("/")}>Return Home</Button>
-            </div>
-          </div>
-        </main>
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-xl font-semibold mb-4">Verification Failed</h1>
+          <p className="mb-6">{error}</p>
+          <Button onClick={() => navigate("/dashboard")}>Back to Dashboard</Button>
+        </div>
       </div>
     );
   }
@@ -106,108 +103,60 @@ const PaymentSuccess = () => {
     <div className="min-h-screen bg-background">
       <Header />
       <main className="pt-32 pb-20">
-        <div className="container mx-auto px-6">
-          <div className="max-w-4xl mx-auto">
-            {/* Success Header */}
-            <div className="text-center mb-12 animate-fade-up">
-              <div className="w-20 h-20 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-6">
-                <CheckCircle2 className="w-10 h-10 text-green-600" />
-              </div>
-              <h1 className="font-display text-3xl md:text-4xl font-bold text-foreground mb-3">
-                Team Unlocked Successfully!
-              </h1>
-              <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-                Your {teamName} contacts are ready. A confirmation email has been sent.
-              </p>
-            </div>
+        <div className="container mx-auto px-6 max-w-4xl">
+          <div className="text-center mb-12">
+            <CheckCircle2 className="w-16 h-16 text-green-600 mx-auto mb-4" />
+            <h1 className="text-3xl font-bold mb-2">Team Unlocked!</h1>
+            <p className="text-muted-foreground">
+              Your {teamName} contacts are ready.
+            </p>
+          </div>
 
-            {/* Professionals Grid */}
-            <div className="grid md:grid-cols-2 gap-6 mb-12">
-              {professionals.map((pro, index) => (
-                <div
-                  key={index}
-                  className="bg-card rounded-2xl border border-border p-6 animate-fade-up"
-                  style={{ animationDelay: `${index * 0.1}s` }}
-                >
-                  <div className="mb-4">
-                    <span className="text-xs font-medium text-accent bg-accent/10 px-2 py-1 rounded">
-                      {pro.roleTitle}
-                    </span>
-                  </div>
-                  
-                  <h3 className="font-semibold text-foreground text-lg mb-4">
-                    {pro.name}
-                  </h3>
-                  
-                  <div className="space-y-3">
-                    <a 
-                      href={`mailto:${pro.email}`}
-                      className="flex items-center gap-3 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      <Mail className="w-4 h-4" />
-                      {pro.email}
+          <div className="grid md:grid-cols-2 gap-6 mb-10">
+            {professionals.map((pro, i) => (
+              <div key={i} className="bg-card border rounded-2xl p-6">
+                <span className="text-xs text-accent bg-accent/10 px-2 py-1 rounded">
+                  {pro.roleTitle}
+                </span>
+                <h3 className="text-lg font-semibold mt-3 mb-4">{pro.name}</h3>
+
+                <div className="space-y-3 text-sm">
+                  <a href={`mailto:${pro.email}`} className="flex gap-2">
+                    <Mail className="w-4 h-4" />
+                    {pro.email}
+                  </a>
+
+                  <a href={pro.linkedin} target="_blank" rel="noopener noreferrer" className="flex gap-2">
+                    <Linkedin className="w-4 h-4" />
+                    LinkedIn
+                  </a>
+
+                  {pro.phone && (
+                    <a href={`tel:${pro.phone}`} className="flex gap-2">
+                      <Phone className="w-4 h-4" />
+                      {pro.phone}
                     </a>
-                    
-                    <a 
-                      href={pro.linkedin}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-3 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      <Linkedin className="w-4 h-4" />
-                      View LinkedIn Profile
-                      <ExternalLink className="w-3 h-3" />
+                  )}
+
+                  {pro.portfolio && (
+                    <a href={pro.portfolio} target="_blank" rel="noopener noreferrer" className="flex gap-2">
+                      <ExternalLink className="w-4 h-4" />
+                      Portfolio
                     </a>
-                    
-                    {pro.phone && (
-                      <a 
-                        href={`tel:${pro.phone}`}
-                        className="flex items-center gap-3 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        <Phone className="w-4 h-4" />
-                        {pro.phone}
-                      </a>
-                    )}
-                    
-                    {pro.portfolio && (
-                      <a 
-                        href={pro.portfolio}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-3 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                        View Portfolio
-                      </a>
-                    )}
-                  </div>
+                  )}
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
+          </div>
 
-            {/* Disclaimer */}
-            <div className="bg-muted/50 rounded-2xl p-6 mb-8 animate-fade-up">
-              <p className="text-sm text-muted-foreground text-center">
-                <strong>Important:</strong> Radah Works provides team recommendations and introductions only. 
-                All work agreements and payments occur directly between you and the professionals.
-              </p>
-            </div>
-
-            {/* Actions */}
-            <div className="flex flex-col sm:flex-row gap-4 justify-center animate-fade-up">
-              <Button variant="premium" size="lg" onClick={() => navigate("/dashboard")}>
-                Go to Dashboard
-                <ArrowRight className="w-4 h-4" />
-              </Button>
-              <Button variant="outline" size="lg" onClick={() => navigate("/intake")}>
-                Design Another Team
-              </Button>
-            </div>
+          <div className="flex gap-4 justify-center">
+            <Button onClick={() => navigate("/dashboard")}>
+              Dashboard
+              <ArrowRight className="w-4 h-4 ml-2" />
+            </Button>
           </div>
         </div>
       </main>
     </div>
   );
-};
-
-export default PaymentSuccess;
+}

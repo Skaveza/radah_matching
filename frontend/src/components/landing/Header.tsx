@@ -33,19 +33,23 @@ const Header = () => {
         </Link>
 
         <nav className="hidden md:flex items-center gap-8">
-          <button 
-            onClick={() => scrollToSection("how-it-works")} 
+          <button
+            onClick={() => scrollToSection("how-it-works")}
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             How It Works
           </button>
-          <button 
-            onClick={() => scrollToSection("pricing")} 
+          <button
+            onClick={() => scrollToSection("pricing")}
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             Pricing
           </button>
-          <Link to="/professionals" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+
+          <Link
+            to="/professional-apply"
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
             For Professionals
           </Link>
         </nav>
@@ -73,37 +77,46 @@ const Header = () => {
       {mobileMenuOpen && (
         <div className="md:hidden fixed inset-0 top-16 z-50 bg-background border-t border-border shadow-xl animate-in slide-in-from-top-2 fade-in duration-200">
           <nav className="flex flex-col p-6 gap-4 bg-background">
-            <button 
-              onClick={() => handleMobileNavClick("how-it-works")} 
+            <button
+              onClick={() => handleMobileNavClick("how-it-works")}
               className="text-left text-lg font-medium text-foreground hover:text-accent transition-colors py-3 border-b border-border/30 animate-in fade-in slide-in-from-top-1 duration-200"
               style={{ animationDelay: "50ms" }}
             >
               How It Works
             </button>
-            <button 
-              onClick={() => handleMobileNavClick("pricing")} 
+
+            <button
+              onClick={() => handleMobileNavClick("pricing")}
               className="text-left text-lg font-medium text-foreground hover:text-accent transition-colors py-3 border-b border-border/30 animate-in fade-in slide-in-from-top-1 duration-200"
               style={{ animationDelay: "100ms" }}
             >
               Pricing
             </button>
-            <Link 
-              to="/professionals" 
+
+            {/* ✅ FIX: was /professionals (404) */}
+            <Link
+              to="/professional-apply"
               onClick={() => setMobileMenuOpen(false)}
               className="text-lg font-medium text-foreground hover:text-accent transition-colors py-3 border-b border-border/30 animate-in fade-in slide-in-from-top-1 duration-200"
               style={{ animationDelay: "150ms" }}
             >
               For Professionals
             </Link>
-            <div 
+
+            <div
               className="pt-4 mt-2 flex flex-col gap-3 animate-in fade-in slide-in-from-top-1 duration-200"
               style={{ animationDelay: "200ms" }}
             >
               <Button variant="outline" size="lg" asChild className="justify-center">
-                <Link to="/login" onClick={() => setMobileMenuOpen(false)}>Sign In</Link>
+                <Link to="/login" onClick={() => setMobileMenuOpen(false)}>
+                  Sign In
+                </Link>
               </Button>
+
               <Button variant="premium" size="lg" asChild className="justify-center">
-                <Link to="/intake" onClick={() => setMobileMenuOpen(false)}>Design My Team</Link>
+                <Link to="/intake" onClick={() => setMobileMenuOpen(false)}>
+                  Design My Team
+                </Link>
               </Button>
             </div>
           </nav>

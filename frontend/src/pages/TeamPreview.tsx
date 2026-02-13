@@ -1,11 +1,13 @@
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+// src/pages/TeamPreview.tsx
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Lock, User, Briefcase, MapPin, Shield, Loader2, Check } from "lucide-react";
 import Header from "@/components/landing/Header";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/api";
+import { auth } from "@/lib/firebase";
 
 interface Role {
   id: string;
@@ -17,77 +19,112 @@ interface Role {
   skillFocus?: string;
 }
 
-interface Team {
-  name: string;
-  goal: string;
-  roles: Role[];
-}
-
 type Tier = "blueprint" | "pro" | "membership";
 
 const TIERS: { id: Tier; name: string; price: string; priceNote: string; features: string[] }[] = [
-  {
-    id: "blueprint",
-    name: "Team Blueprint",
-    price: "$199",
-    priceNote: "one-time",
-    features: ["Full contact details", "Salary benchmarking", "Team architecture export"],
-  },
-  {
-    id: "pro",
-    name: "Blueprint Pro",
-    price: "$399",
-    priceNote: "one-time",
-    features: ["Everything in Blueprint", "Concierge introductions", "Priority support", "30-day replacement guarantee"],
-  },
-  {
-    id: "membership",
-    name: "Team Architect",
-    price: "$149",
-    priceNote: "/month",
-    features: ["Unlimited architectures", "Recurring consultations", "Priority matching", "Dedicated account manager"],
-  },
+  { id: "blueprint", name: "Team Blueprint", price: "$199", priceNote: "one-time", features: ["Full contact details", "Salary benchmarking", "Team architecture export"] },
+  { id: "pro", name: "Blueprint Pro", price: "$399", priceNote: "one-time", features: ["Everything in Blueprint", "Concierge introductions", "Priority support", "30-day replacement guarantee"] },
+  { id: "membership", name: "Team Architect", price: "$149", priceNote: "/month", features: ["Unlimited architectures", "Recurring consultations", "Priority matching", "Dedicated account manager"] },
 ];
 
-const TeamPreview = () => {
+export default function TeamPreview() {
   const navigate = useNavigate();
-  const [team, setTeam] = useState<Team | null>(null);
+  const [searchParams] = useSearchParams();
+
+  // ✅ read from query OR localStorage fallback
+  const projectId =
+    searchParams.get("projectId") ||
+    localStorage.getItem("activeProjectId") ||
+    "";
+
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [unlocked, setUnlocked] = useState(false);
   const [selectedTier, setSelectedTier] = useState<Tier>("blueprint");
-  const [isLoading, setIsLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [payLoading, setPayLoading] = useState(false);
+
+  const currentTier = useMemo(() => TIERS.find((t) => t.id === selectedTier)!, [selectedTier]);
 
   useEffect(() => {
-    const storedTeam = localStorage.getItem("selectedTeam");
-    if (storedTeam) {
-      setTeam(JSON.parse(storedTeam) as Team);
-    } else {
-      navigate("/intake");
-    }
-  }, [navigate]);
+    const load = async () => {
+      if (!projectId) {
+        toast.error("Missing project id. Please restart from Intake.");
+        navigate("/intake");
+        return;
+      }
 
-  const handlePurchase = async () => {
-    setIsLoading(true);
+      try {
+        setLoading(true);
+
+        const token = await auth.currentUser?.getIdToken();
+        if (!token) throw new Error("Missing auth token");
+
+        const res = await apiFetch<{
+          success: boolean;
+          project_id: string;
+          team: any[];
+          unlocked: boolean;
+        }>(`/api/projects/${encodeURIComponent(projectId)}/recommendation`, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        setUnlocked(!!res.unlocked);
+
+        const team = Array.isArray(res.team) ? res.team : [];
+        setRoles(team as Role[]);
+      } catch (e: any) {
+        toast.error(e.message || "Failed to load team preview");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    load();
+  }, [projectId, navigate]);
+
+  const handleCheckout = async () => {
+    if (!projectId) return;
+
     try {
-      const { data, error } = await supabase.functions.invoke("create-payment", {
-        body: { teamData: team, tier: selectedTier },
+      setPayLoading(true);
+
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error("Missing auth token");
+
+      const res = await apiFetch<{ success: boolean; url: string }>(`/api/payments/checkout`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          project_id: projectId,
+          plan: selectedTier,
+        }),
       });
 
-      if (error) throw error;
-      if (data?.url) {
-        window.open(data.url, "_blank");
-      } else {
-        throw new Error("No checkout URL received");
-      }
-    } catch (error) {
-      console.error("Payment error:", error);
-      toast.error("Failed to initiate payment. Please try again.");
+      if (!res.url) throw new Error("No Stripe URL returned");
+
+      // Same-tab is usually better for Stripe checkout:
+      window.location.href = res.url;
+    } catch (e: any) {
+      toast.error(e.message || "Failed to start checkout");
     } finally {
-      setIsLoading(false);
+      setPayLoading(false);
     }
   };
 
-  if (!team) return null;
-
-  const currentTier = TIERS.find((t) => t.id === selectedTier)!;
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="pt-32 pb-20 flex items-center justify-center">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -95,25 +132,27 @@ const TeamPreview = () => {
       <main className="pt-32 pb-20">
         <div className="container mx-auto px-6">
           <div className="max-w-5xl mx-auto">
-            {/* Header */}
             <div className="text-center mb-12 animate-fade-up">
               <h1 className="font-display text-3xl md:text-4xl font-bold text-foreground mb-3">
-                {team.name}
+                Team Preview
               </h1>
               <p className="text-lg text-muted-foreground max-w-2xl mx-auto mb-6">
-                {team.goal}
+                {unlocked
+                  ? "You have unlocked full profiles and contact details."
+                  : "Profiles are masked until payment is completed."}
               </p>
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-muted">
-                <Lock className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">
-                  Full contact details unlocked after purchase
-                </span>
-              </div>
+              {!unlocked && (
+                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-muted">
+                  <Lock className="w-4 h-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">
+                    Full contact details unlocked after purchase
+                  </span>
+                </div>
+              )}
             </div>
 
-            {/* Professionals Grid */}
             <div className="grid md:grid-cols-2 gap-6 mb-12">
-              {team.roles.map((role, index) => {
+              {roles.map((role, index) => {
                 const skills = role.skillFocus?.split(",").map((s) => s.trim()).filter(Boolean) || [];
                 return (
                   <div
@@ -127,6 +166,7 @@ const TeamPreview = () => {
                       </div>
                       <div className="flex-1">
                         <h3 className="font-semibold text-foreground mb-1">{role.title}</h3>
+
                         <div className="space-y-2 mt-3">
                           {skills.length > 0 && (
                             <div className="flex flex-wrap gap-1.5">
@@ -140,14 +180,20 @@ const TeamPreview = () => {
                               ))}
                             </div>
                           )}
+
                           <div className="flex items-center gap-2 text-sm">
                             <Briefcase className="w-4 h-4 text-muted-foreground" />
                             <span className="text-foreground">{role.experience}</span>
                           </div>
+
                           <div className="flex items-center gap-2 text-sm">
                             <MapPin className="w-4 h-4 text-muted-foreground" />
                             <span className="text-foreground">{role.industry}</span>
                           </div>
+                        </div>
+
+                        <div className="mt-4 text-sm text-muted-foreground">
+                          {role.whyCritical}
                         </div>
                       </div>
                     </div>
@@ -156,93 +202,83 @@ const TeamPreview = () => {
               })}
             </div>
 
-            {/* Tier Selection */}
-            <div className="mb-8 animate-fade-up">
-              <h2 className="font-display text-2xl font-bold text-foreground text-center mb-6">
-                Choose Your Plan
-              </h2>
-              <div className="grid md:grid-cols-3 gap-4">
-                {TIERS.map((tier) => (
-                  <button
-                    key={tier.id}
-                    onClick={() => setSelectedTier(tier.id)}
-                    className={cn(
-                      "relative rounded-2xl border-2 p-6 text-left transition-all",
-                      selectedTier === tier.id
-                        ? "border-accent bg-accent/5 shadow-lg"
-                        : "border-border hover:border-accent/30"
-                    )}
-                  >
-                    {tier.id === "pro" && (
-                      <span className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 text-xs font-medium rounded-full bg-accent text-accent-foreground">
-                        Most Popular
-                      </span>
-                    )}
-                    <h3 className="font-semibold text-foreground mb-1">{tier.name}</h3>
-                    <div className="flex items-baseline gap-1 mb-4">
-                      <span className="text-2xl font-display font-bold text-foreground">{tier.price}</span>
-                      <span className="text-sm text-muted-foreground">{tier.priceNote}</span>
+            {!unlocked && (
+              <>
+                <div className="mb-8 animate-fade-up">
+                  <h2 className="font-display text-2xl font-bold text-foreground text-center mb-6">
+                    Choose Your Plan
+                  </h2>
+                  <div className="grid md:grid-cols-3 gap-4">
+                    {TIERS.map((tier) => (
+                      <button
+                        key={tier.id}
+                        onClick={() => setSelectedTier(tier.id)}
+                        className={cn(
+                          "relative rounded-2xl border-2 p-6 text-left transition-all",
+                          selectedTier === tier.id
+                            ? "border-accent bg-accent/5 shadow-lg"
+                            : "border-border hover:border-accent/30"
+                        )}
+                      >
+                        {tier.id === "pro" && (
+                          <span className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 text-xs font-medium rounded-full bg-accent text-accent-foreground">
+                            Most Popular
+                          </span>
+                        )}
+                        <h3 className="font-semibold text-foreground mb-1">{tier.name}</h3>
+                        <div className="flex items-baseline gap-1 mb-4">
+                          <span className="text-2xl font-display font-bold text-foreground">{tier.price}</span>
+                          <span className="text-sm text-muted-foreground">{tier.priceNote}</span>
+                        </div>
+                        <ul className="space-y-2">
+                          {tier.features.map((feature) => (
+                            <li key={feature} className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Check className="w-4 h-4 text-accent flex-shrink-0" />
+                              {feature}
+                            </li>
+                          ))}
+                        </ul>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-gradient-premium rounded-3xl p-8 md:p-10 text-primary-foreground animate-fade-up">
+                  <div className="max-w-2xl mx-auto text-center">
+                    <h2 className="font-display text-2xl md:text-3xl font-bold mb-4">Unlock Your Team</h2>
+                    <p className="text-primary-foreground/70 mb-6">
+                      Get access to full profiles for all {roles.length} professionals with the {currentTier.name} plan.
+                    </p>
+
+                    <div className="flex items-baseline justify-center gap-2 mb-6">
+                      <span className="text-4xl md:text-5xl font-display font-bold">{currentTier.price}</span>
+                      <span className="text-primary-foreground/70">{currentTier.priceNote}</span>
                     </div>
-                    <ul className="space-y-2">
-                      {tier.features.map((feature) => (
-                        <li key={feature} className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Check className="w-4 h-4 text-accent flex-shrink-0" />
-                          {feature}
-                        </li>
-                      ))}
-                    </ul>
-                  </button>
-                ))}
-              </div>
-            </div>
 
-            {/* Purchase Card */}
-            <div className="bg-gradient-premium rounded-3xl p-8 md:p-10 text-primary-foreground animate-fade-up">
-              <div className="max-w-2xl mx-auto text-center">
-                <h2 className="font-display text-2xl md:text-3xl font-bold mb-4">
-                  Unlock Your Team
-                </h2>
-                <p className="text-primary-foreground/70 mb-6">
-                  Get instant access to full contact details for all {team.roles.length} professionals
-                  with the {currentTier.name} plan.
-                </p>
+                    <Button
+                      variant="premium"
+                      size="xl"
+                      className="mb-6"
+                      onClick={handleCheckout}
+                      disabled={payLoading}
+                    >
+                      {payLoading ? <Loader2 className="w-5 h-5 mr-2 animate-spin" /> : <Lock className="w-5 h-5 mr-2" />}
+                      {payLoading ? "Redirecting..." : `Checkout (${currentTier.name})`}
+                    </Button>
 
-                <div className="flex items-baseline justify-center gap-2 mb-6">
-                  <span className="text-4xl md:text-5xl font-display font-bold">
-                    {currentTier.price}
-                  </span>
-                  <span className="text-primary-foreground/70">{currentTier.priceNote}</span>
+                    <div className="flex items-start gap-2 justify-center text-sm text-primary-foreground/60">
+                      <Shield className="w-4 h-4 mt-0.5" />
+                      <p className="text-left max-w-md">
+                        You are purchasing AI-generated matching access — not labor, employment, or managed services.
+                      </p>
+                    </div>
+                  </div>
                 </div>
-
-                <Button
-                  variant="premium"
-                  size="xl"
-                  className="mb-6"
-                  onClick={handlePurchase}
-                  disabled={isLoading}
-                >
-                  {isLoading ? (
-                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                  ) : (
-                    <Lock className="w-5 h-5 mr-2" />
-                  )}
-                  {isLoading ? "Processing..." : `Unlock with ${currentTier.name}`}
-                </Button>
-
-                <div className="flex items-start gap-2 justify-center text-sm text-primary-foreground/60">
-                  <Shield className="w-4 h-4 mt-0.5" />
-                  <p className="text-left max-w-md">
-                    You are purchasing AI-generated team architecture and vetted access —
-                    not labor, employment, or managed services.
-                  </p>
-                </div>
-              </div>
-            </div>
+              </>
+            )}
           </div>
         </div>
       </main>
     </div>
   );
-};
-
-export default TeamPreview;
+}

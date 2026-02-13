@@ -1,153 +1,199 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-  ReactNode,
-} from "react";
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import {
   User,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signOut as firebaseSignOut,
+  signInWithEmailAndPassword,
+  signOut as fbSignOut,
   GoogleAuthProvider,
   signInWithPopup,
-  sendPasswordResetEmail,
-  getIdToken,
+  updateProfile,
 } from "firebase/auth";
-import {
-  doc,
-  setDoc,
-  getDoc,
-  serverTimestamp,
-} from "firebase/firestore";
-import { auth, db } from "@/lib/firebase";
+import { auth } from "@/lib/firebase";
+import { apiFetch } from "@/lib/api";
 
-interface SignupData {
+type Role = "entrepreneur" | "professional" | "admin" | null;
+
+type MeResponse = {
+  success?: boolean;
+  uid?: string;
+  role: Role;
+  professional_status?: string | null;
+  payment_status?: string | null;
+  plan?: string | null;
+};
+
+type SignupPayload = {
   fullName: string;
   email: string;
   password: string;
   role: "entrepreneur" | "professional";
   region: string;
-}
+};
 
-interface AuthContextType {
+type AuthContextValue = {
   user: User | null;
   loading: boolean;
-  signUp: (data: SignupData) => Promise<void>;
+
+  // backend profile
+  role: Role;
+  professional_status: string | null;
+  payment_status: string | null;
+  plan: string | null;
+
+  // actions
+  refreshMe: () => Promise<MeResponse | null>;
+  usersSetup: (payload: { name: string; role: "entrepreneur" | "professional"; region: string }) => Promise<void>;
+  signUp: (p: SignupPayload) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
-  signInWithGoogle: () => Promise<void>;
-  resetPassword: (email: string) => Promise<void>;
+  signInWithGoogle: () => Promise<MeResponse | null>;
   signOut: () => Promise<void>;
-  getToken: () => Promise<string | null>;
+};
+
+const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+function getBearerHeaders(token: string, extra?: HeadersInit): HeadersInit {
+  return {
+    ...(extra || {}),
+    Authorization: `Bearer ${token}`,
+  };
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState<User | null>(auth.currentUser);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    return onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
-      setLoading(false);
+  // backend profile fields
+  const [role, setRole] = useState<Role>(null);
+  const [professional_status, setProfessionalStatus] = useState<string | null>(null);
+  const [payment_status, setPaymentStatus] = useState<string | null>(null);
+  const [plan, setPlan] = useState<string | null>(null);
+
+  const applyMe = (me: MeResponse | null) => {
+    if (!me) return;
+    setRole(me.role ?? null);
+    setProfessionalStatus(me.professional_status ?? null);
+    setPaymentStatus(me.payment_status ?? null);
+    setPlan(me.plan ?? null);
+  };
+
+  const refreshMe = async (): Promise<MeResponse | null> => {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) return null;
+
+    const me = await apiFetch<MeResponse>("/api/me", {
+      method: "GET",
+      headers: getBearerHeaders(token),
     });
-  }, []);
 
-  const signUp = async ({
-    fullName,
-    email,
-    password,
-    role,
-    region,
-  }: SignupData) => {
-    const cred = await createUserWithEmailAndPassword(
-      auth,
-      email,
-      password
-    );
+    applyMe(me);
+    return me;
+  };
 
-    const uid = cred.user.uid;
+  // Create/merge user profile in Firestore via your PHP API
+  const usersSetup = async (payload: {
+    name: string;
+    role: "entrepreneur" | "professional";
+    region: string;
+  }) => {
+    const token = await auth.currentUser?.getIdToken();
+    const email = auth.currentUser?.email;
 
-    await setDoc(doc(db, "users", uid), {
-      uid,
-      full_name: fullName,
-      email,
-      role,
-      region,
-      plan: "starter",
-      projects_created: 0,
-      max_projects: 1,
-      payment_status: "inactive",
-      created_at: serverTimestamp(),
+    if (!token) throw new Error("Missing auth token");
+    if (!email) throw new Error("Missing email");
+
+    await apiFetch("/api/users/setup", {
+      method: "POST",
+      headers: getBearerHeaders(token, { "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        name: payload.name,
+        email,
+        role: payload.role,
+        region: payload.region,
+      }),
     });
+
+    await refreshMe();
+  };
+
+  const signUp = async (p: SignupPayload) => {
+    const cred = await createUserWithEmailAndPassword(auth, p.email, p.password);
+    await updateProfile(cred.user, { displayName: p.fullName });
+
+    await usersSetup({ name: p.fullName, role: p.role, region: p.region });
   };
 
   const signIn = async (email: string, password: string) => {
     await signInWithEmailAndPassword(auth, email, password);
+    await refreshMe();
   };
 
+  /**
+   * Google sign-in does NOT collect role/region.
+   * After sign-in:
+   *  - call /api/me
+   *  - if role is null => you must send user to ChooseRole/Setup screen
+   */
   const signInWithGoogle = async () => {
     const provider = new GoogleAuthProvider();
-    const result = await signInWithPopup(auth, provider);
+    await signInWithPopup(auth, provider);
 
-    const uid = result.user.uid;
-    const userRef = doc(db, "users", uid);
-    const snapshot = await getDoc(userRef);
-
-    if (!snapshot.exists()) {
-      await setDoc(userRef, {
-        uid,
-        full_name: result.user.displayName || "",
-        email: result.user.email,
-        role: "professional",
-        region: "Kenya",
-        plan: "starter",
-        projects_created: 0,
-        max_projects: 1,
-        payment_status: "inactive",
-        created_at: serverTimestamp(),
-      });
-    }
-  };
-
-  const resetPassword = async (email: string) => {
-    await sendPasswordResetEmail(auth, email);
+    // This may return role=null for a brand new Google user
+    return await refreshMe();
   };
 
   const signOut = async () => {
-    await firebaseSignOut(auth);
+    await fbSignOut(auth);
+
+    // reset backend profile state
+    setRole(null);
+    setProfessionalStatus(null);
+    setPaymentStatus(null);
+    setPlan(null);
   };
 
-  const getToken = async (): Promise<string | null> => {
-    if (!auth.currentUser) return null;
-    return await getIdToken(auth.currentUser, true);
-  };
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged(async (u) => {
+      setUser(u);
+      setLoading(false);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        loading,
-        signUp,
-        signIn,
-        signInWithGoogle,
-        resetPassword,
-        signOut,
-        getToken,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+      if (u) {
+        // load backend role/payment status
+        await refreshMe();
+      } else {
+        // logged out
+        setRole(null);
+        setProfessionalStatus(null);
+        setPaymentStatus(null);
+        setPlan(null);
+      }
+    });
+    return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user,
+      loading,
+      role,
+      professional_status,
+      payment_status,
+      plan,
+      refreshMe,
+      usersSetup,
+      signUp,
+      signIn,
+      signInWithGoogle,
+      signOut,
+    }),
+    [user, loading, role, professional_status, payment_status, plan]
   );
-};
 
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error("useAuth must be used within AuthProvider");
-  }
-  return context;
-};
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used inside <AuthProvider />");
+  return ctx;
+}
