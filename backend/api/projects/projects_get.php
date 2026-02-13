@@ -1,75 +1,41 @@
 <?php
-
-require __DIR__ . '/bootstrap.php';
-require __DIR__ . '/firestore_service.php';
+require __DIR__ . '/../../bootstrap.php';
+require __DIR__ . '/../../firestore_service.php';
+require __DIR__ . '/../middlewear/firebase_middlewear_v2.php';
 
 header("Content-Type: application/json");
 
-function json_response($data, int $code = 200)
-{
-    http_response_code($code);
-    echo json_encode($data, JSON_PRETTY_PRINT);
-    exit;
+function json_response($data, int $code = 200) {
+  http_response_code($code);
+  echo json_encode($data, JSON_PRETTY_PRINT);
+  exit;
 }
 
-if (!isset($_GET['entrepreneur_id'])) {
-    json_response([
-        "success" => false,
-        "error" => "entrepreneur_id is required"
-    ], 400);
-}
+$mw = new FirebaseMiddlewareV2();
+$authUser = $mw->verifyToken(["entrepreneur"]);
+$uid = $authUser["uid"];
 
-$entrepreneurId = $_GET['entrepreneur_id'];
 $firestore = new FirestoreService();
 
-/* -----------------------------
- * Fetch projects
- * ----------------------------- */
-$projectsQuery = $firestore->collection("projects")
-    ->where("entrepreneur_id", "=", $entrepreneurId)
-    ->documents();
+$docs = $firestore->collection("projects")
+  ->where("entrepreneur_id", "=", $uid)
+  ->documents();
 
 $projects = [];
 
-foreach ($projectsQuery as $projectDoc) {
-    $project = $projectDoc->data();
-    $projectId = $projectDoc->id();
+foreach ($docs as $doc) {
+  $projectId = $doc->id();
+  $projectData = $doc->data();
 
-    /* Recommendation snapshot */
-    $recommendationDocs = $firestore
-        ->collection("project_recommendations")
-        ->where("project_id", "=", $projectId)
-        ->limit(1)
-        ->documents();
+  // Try load saved team blueprint for this project
+  $teamSnap = $firestore->collection("project_teams")->document($projectId)->snapshot();
+  $teamData = $teamSnap->exists() ? $teamSnap->data() : null;
 
-    $recommendations = null;
-    foreach ($recommendationDocs as $recDoc) {
-        $recommendations = $recDoc->data()["recommendations"];
-        break;
-    }
-
-    /* Team (if generated) */
-    $teamDocs = $firestore
-        ->collection("project_teams")
-        ->where("project_id", "=", $projectId)
-        ->limit(1)
-        ->documents();
-
-    $team = null;
-    foreach ($teamDocs as $teamDoc) {
-        $team = $teamDoc->data();
-        break;
-    }
-
-    $projects[] = [
-        "project_id" => $projectId,
-        "project" => $project,
-        "recommendations" => $recommendations,
-        "team" => $team
-    ];
+  $projects[] = [
+    "project_id" => $projectId,
+    "project" => $projectData,
+    "team" => $teamData, // null if not saved/purchased
+  ];
 }
 
-json_response([
-    "success" => true,
-    "projects" => $projects
-]);
+json_response(["success" => true, "projects" => $projects]);

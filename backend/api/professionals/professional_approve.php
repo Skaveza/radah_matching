@@ -1,67 +1,38 @@
 <?php
-require __DIR__ . '/bootstrap.php';
-require __DIR__ . '/firestore_service.php';
+require __DIR__ . '/../../bootstrap.php';
+require __DIR__ . '/../../firestore_service.php';
+require __DIR__ . '/../middlewear/firebase_middlewear_v2.php';
 
 header("Content-Type: application/json");
 
-function json_response($data, int $code = 200)
-{
-    http_response_code($code);
-    echo json_encode($data, JSON_PRETTY_PRINT);
-    exit;
+function json_response($data, int $code = 200) {
+  http_response_code($code);
+  echo json_encode($data, JSON_PRETTY_PRINT);
+  exit;
 }
 
-$id = $_GET["id"] ?? null;
-if (!$id) {
-    json_response([
-        "success" => false,
-        "error" => "Missing professional id"
-    ], 400);
-}
+$mw = new FirebaseMiddlewareV2();
+$mw->verifyToken(["admin"]); // IMPORTANT: admin only
 
-try {
-    $firestore = new FirestoreService();
+$uid = $_GET["uid"] ?? null;
+if (!$uid) json_response(["success"=>false,"error"=>"Missing uid"], 400);
 
-    $proRef = $firestore->collection("professionals")->document($id);
-    $snapshot = $proRef->snapshot();
+$firestore = new FirestoreService();
 
-    if (!$snapshot->exists()) {
-        json_response([
-            "success" => false,
-            "error" => "Professional not found"
-        ], 404);
-    }
+$proSnap = $firestore->collection("professionals")->document($uid)->snapshot();
+if (!$proSnap->exists()) json_response(["success"=>false,"error"=>"Professional not found"], 404);
 
-    $proRef->set([
-        "status" => "approved",
-        "flags" => [],
-        "reviewed_at" => date("c")
-    ], ["merge" => true]);
+$now = date("c");
 
-    json_response([
-        "success" => true,
-        "message" => "Professional approved",
-        "id" => $id,
-        "status" => "approved"
-    ]);
+$firestore->collection("professionals")->document($uid)->set([
+  "approved" => true,
+  "approved_at" => $now,
+  "updated_at" => $now
+], ["merge" => true]);
 
-} catch (Exception $e) {
-    json_response([
-        "success" => false,
-        "error" => "Server error",
-        "details" => $e->getMessage()
-    ], 500);
-}
+$firestore->collection("users")->document($uid)->set([
+  "professional_status" => "approved",
+  "updated_at" => $now
+], ["merge" => true]);
 
-// Resolve admin notifications
-$notifications = $firestore->collection("admin_notifications")
-    ->where("professional_id", "==", $id)
-    ->where("status", "==", "unread")
-    ->documents();
-
-foreach ($notifications as $note) {
-    $note->reference()->set([
-        "status" => "resolved",
-        "resolved_at" => date("c")
-    ], ["merge" => true]);
-}
+json_response(["success"=>true,"uid"=>$uid,"approved"=>true]);

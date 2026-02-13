@@ -1,74 +1,71 @@
 <?php
-
-require __DIR__ . '/bootstrap.php';
-require __DIR__ . '/firestore_service.php';
-require __DIR__ . '/matching_engine.php';
+require __DIR__ . '/../../bootstrap.php';
+require __DIR__ . '/../../firestore_service.php';
+require __DIR__ . '/../middlewear/firebase_middlewear_v2.php';
+require __DIR__ . '/../../engines/matching_engine.php';
 
 header("Content-Type: application/json");
 
-function json_response($data, int $code = 200)
-{
-    http_response_code($code);
-    echo json_encode($data, JSON_PRETTY_PRINT);
-    exit;
+function json_response($data, int $code = 200) {
+  http_response_code($code);
+  echo json_encode($data, JSON_PRETTY_PRINT);
+  exit;
 }
 
-$body = json_decode(file_get_contents("php://input"), true);
+$mw = new FirebaseMiddlewareV2();
+$authUser = $mw->verifyToken(["entrepreneur"]);
+$entrepreneurId = $authUser["uid"];
 
-if (!isset($body["project_id"])) {
-    json_response([
-        "success" => false,
-        "error" => "project_id is required"
-    ], 400);
+// $id comes from index.php route: /api/projects/{id}/team/generate
+$projectId = isset($id) ? trim($id) : "";
+
+// Fallback (optional): allow body project_id if route didn't pass
+if ($projectId === "") {
+  $body = json_decode(file_get_contents("php://input"), true);
+  if (is_array($body) && !empty($body["project_id"])) {
+    $projectId = trim($body["project_id"]);
+  }
 }
 
-$projectId = $body["project_id"];
+if ($projectId === "") {
+  json_response(["success"=>false,"error"=>"Project id is required"], 400);
+}
+
 $firestore = new FirestoreService();
 
-/* -----------------------------
- * Fetch project
- * ----------------------------- */
-$projectDoc = $firestore->collection("projects")->document($projectId)->snapshot();
-if (!$projectDoc->exists()) {
-    json_response([
-        "success" => false,
-        "error" => "Project not found"
-    ], 404);
+// Load project
+$projectSnap = $firestore->collection("projects")->document($projectId)->snapshot();
+if (!$projectSnap->exists()) json_response(["success"=>false,"error"=>"Project not found"], 404);
+
+$project = $projectSnap->data();
+
+// Ownership check
+if (($project["entrepreneur_id"] ?? "") !== $entrepreneurId) {
+  json_response(["success"=>false,"error"=>"Forbidden"], 403);
 }
 
-$project = $projectDoc->data();
+// Load approved professionals
+$professionals = [];
+$pros = $firestore->collection("professionals")
+  ->where("approved", "=", true)
+  ->documents();
 
-/* -----------------------------
- * Fetch recommendation snapshot
- * ----------------------------- */
-$recDocs = $firestore
-    ->collection("project_recommendations")
-    ->where("project_id", "=", $projectId)
-    ->limit(1)
-    ->documents();
-
-$recommendations = null;
-foreach ($recDocs as $doc) {
-    $recommendations = $doc->data()["recommendations"];
-    break;
+foreach ($pros as $p) {
+  $row = $p->data();
+  $row["id"] = $p->id();
+  $professionals[] = $row;
 }
 
-if (!$recommendations) {
-    json_response([
-        "success" => false,
-        "error" => "No recommendations found"
-    ], 400);
+if (empty($professionals)) {
+  json_response(["success"=>false,"error"=>"No approved professionals available"], 400);
 }
 
-/* -----------------------------
- * Generate team
- * ----------------------------- */
-$team = MatchingEngine::generateTeam(
-    $recommendations["suggested_roles"],
-    $project
-);
+// Generate team
+$result = MatchingEngine::generateTeam($project, $professionals, 4);
 
 json_response([
-    "success" => true,
-    "team" => $team
+  "success" => true,
+  "project_id" => $projectId,
+  "team" => $result["team"],
+  "project_signals" => $result["project_signals"] ?? null
 ]);

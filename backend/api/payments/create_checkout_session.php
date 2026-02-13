@@ -1,82 +1,70 @@
 <?php
-require __DIR__ . '/bootstrap.php';
-require __DIR__ . '/firestore_service.php';
-require __DIR__ . '/vendor/autoload.php'; // Stripe PHP SDK
+require __DIR__ . '/../bootstrap.php';
+require __DIR__ . '/../firestore_service.php';
+require __DIR__ . '/../vendor/autoload.php';
+require __DIR__ . '/../api/middlewear/firebase_middlewear_v2.php';
 
-\Stripe\Stripe::setApiKey(getenv('STRIPE_SECRET_KEY'));
-$payload = @file_get_contents('php://input');
-$sig_header = $_SERVER['HTTP_STRIPE_SIGNATURE'] ?? '';
-$endpoint_secret = getenv('STRIPE_WEBHOOK_SECRET');
+use Stripe\Stripe;
+use Stripe\Checkout\Session;
 
-try {
-    $event = \Stripe\Webhook::constructEvent(
-        $payload, $sig_header, $endpoint_secret
-    );
-} catch (\UnexpectedValueException $e) {
-    http_response_code(400);
-    exit('Invalid payload');
-} catch (\Stripe\Exception\SignatureVerificationException $e) {
-    http_response_code(400);
-    exit('Invalid signature');
+header("Content-Type: application/json");
+
+function json_response($data, int $code = 200) {
+  http_response_code($code);
+  echo json_encode($data, JSON_PRETTY_PRINT);
+  exit;
 }
+
+$mw = new FirebaseMiddlewareV2();
+$authUser = $mw->verifyToken(["entrepreneur"]);
+$uid = $authUser["uid"];
+
+$body = json_decode(file_get_contents("php://input"), true);
+if (!is_array($body)) json_response(["success"=>false,"error"=>"Invalid JSON"], 400);
+
+$projectId = $body["project_id"] ?? null;
+$plan = $body["plan"] ?? "starter";
+
+if (!$projectId) json_response(["success"=>false,"error"=>"project_id is required"], 422);
 
 $firestore = new FirestoreService();
+$projectSnap = $firestore->collection("projects")->document($projectId)->snapshot();
+if (!$projectSnap->exists()) json_response(["success"=>false,"error"=>"Project not found"], 404);
 
-switch ($event->type) {
-    // 1. Successful checkout
-    case 'checkout.session.completed':
-        $session = $event->data->object;
-        $entrepreneurId = $session->client_reference_id ?? null;
-        if ($entrepreneurId) {
-            $firestore->collection('users')->document($entrepreneurId)->update([
-                ['path' => 'payment_status', 'value' => 'active']
-            ]);
-        }
-        break;
-
-    // 2. Subscription update (like renewal)
-    case 'customer.subscription.updated':
-        $subscription = $event->data->object;
-        $entrepreneurId = $subscription->metadata->entrepreneur_id ?? null;
-        $status = $subscription->status ?? 'inactive';
-        if ($entrepreneurId) {
-            $firestore->collection('users')->document($entrepreneurId)->update([
-                ['path' => 'payment_status', 'value' => $status === 'active' ? 'active' : 'inactive']
-            ]);
-        }
-        break;
-
-    // 3. Payment failure
-    case 'invoice.payment_failed':
-        $invoice = $event->data->object;
-        $entrepreneurId = $invoice->metadata->entrepreneur_id ?? null;
-        if ($entrepreneurId) {
-            $firestore->collection('users')->document($entrepreneurId)->update([
-                ['path' => 'payment_status', 'value' => 'inactive']
-            ]);
-        }
-        break;
-
-    // 4. Cancellations
-    case 'customer.subscription.deleted':
-        $subscription = $event->data->object;
-        $entrepreneurId = $subscription->metadata->entrepreneur_id ?? null;
-        if ($entrepreneurId) {
-            $firestore->collection('users')->document($entrepreneurId)->update([
-                ['path' => 'payment_status', 'value' => 'inactive']
-            ]);
-        }
-        break;
-
-    // 5. Catch-all for other events
-    default:
-        // Log unknown events to Firestore for admin review
-        $firestore->collection('stripe_events')->add([
-            'event_type' => $event->type,
-            'payload' => json_decode($payload, true),
-            'created_at' => date('c')
-        ]);
-        break;
+$project = $projectSnap->data();
+if (($project["entrepreneur_id"] ?? "") !== $uid) {
+  json_response(["success"=>false,"error"=>"Not your project"], 403);
 }
 
-http_response_code(200);
+$priceId = match($plan) {
+  "blueprint" => $_ENV["STRIPE_PRICE_BLUEPRINT"] ?? null,
+  "pro" => $_ENV["STRIPE_PRICE_PRO"] ?? null,
+  "membership" => $_ENV["STRIPE_PRICE_MEMBERSHIP"] ?? null,
+  default => null
+};
+
+if (!$priceId) json_response(["success"=>false,"error"=>"Invalid plan"], 422);
+
+Stripe::setApiKey($_ENV["STRIPE_SECRET_KEY"] ?? "");
+
+$frontend = rtrim($_ENV["FRONTEND_URL"] ?? "http://localhost:5173", "/");
+
+$session = Session::create([
+  "mode" => "payment",
+  "line_items" => [[
+    "price" => $priceId,
+    "quantity" => 1
+  ]],
+  "success_url" => $frontend . "/payment-success?session_id={CHECKOUT_SESSION_ID}&projectId=" . $projectId,
+  "cancel_url" => $frontend . "/projects/" . $projectId . "?canceled=1",
+  "metadata" => [
+    "project_id" => $projectId,
+    "entrepreneur_id" => $uid,
+    "plan" => $plan
+  ]
+]);
+
+json_response([
+  "success" => true,
+  "url" => $session->url
+]);

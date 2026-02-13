@@ -1,41 +1,32 @@
 <?php
-require __DIR__ . '/bootstrap.php';
-require __DIR__ . '/firestore_service.php';
+require __DIR__ . '/../../bootstrap.php';
+require __DIR__ . '/../../firestore_service.php';
+require __DIR__ . '/../middlewear/firebase_middlewear_v2.php';
 
 header("Content-Type: application/json");
 
-function json_response($data, int $code = 200)
-{
-    http_response_code($code);
-    echo json_encode($data, JSON_PRETTY_PRINT);
-    exit;
+function json_response($data, int $code = 200) {
+  http_response_code($code);
+  echo json_encode($data, JSON_PRETTY_PRINT);
+  exit;
 }
 
-try {
-    $firestore = new FirestoreService();
-    $collection = $firestore->collection("professionals");
+$mw = new FirebaseMiddlewareV2();
+$mw->verifyToken(["admin"]);
 
-    $query = $collection->where("status", "==", "pending_review");
-    $documents = $query->documents();
+$firestore = new FirestoreService();
 
-    $results = [];
-    foreach ($documents as $doc) {
-        if (!$doc->exists()) continue;
-        $row = $doc->data();
-        $row["id"] = $doc->id();
-        $results[] = $row;
-    }
+$docs = $firestore->collection("professionals")
+  ->where("approved", "=", false)
+  ->documents();
 
-    json_response([
-        "success" => true,
-        "count" => count($results),
-        "professionals" => $results
-    ]);
-
-} catch (Exception $e) {
-    json_response([
-        "success" => false,
-        "error" => "Server error",
-        "details" => $e->getMessage()
-    ], 500);
+$results = [];
+foreach ($docs as $d) {
+  if (!$d->exists()) continue;
+  $row = $d->data();
+  if (($row["rejected"] ?? false) === true) continue; // hide rejected from pending
+  $row["id"] = $d->id();
+  $results[] = $row;
 }
+
+json_response(["success"=>true,"count"=>count($results),"professionals"=>$results]);

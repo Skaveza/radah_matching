@@ -24,7 +24,7 @@ class Enums
 
     public static array $PRO_ROLES = [
         "technical_lead",
-        "fullstack_developer",
+        "full_stack_developer",
         "frontend_developer",
         "backend_developer",
         "uiux_designer",

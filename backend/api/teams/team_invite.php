@@ -1,63 +1,61 @@
 <?php
 require __DIR__ . '/../../bootstrap.php';
 require __DIR__ . '/../../firestore_service.php';
-require __DIR__ . '/../../enums/team_status_enums.php';
+require __DIR__ . '/../middlewear/firebase_middlewear_v2.php';
 
 header("Content-Type: application/json");
 
-function json_response($data, int $code = 200)
-{
-    http_response_code($code);
-    echo json_encode($data, JSON_PRETTY_PRINT);
-    exit;
+function json_response($data, int $code = 200) {
+  http_response_code($code);
+  echo json_encode($data, JSON_PRETTY_PRINT);
+  exit;
 }
 
-// JSON body or POST form
-$bodyJson = json_decode(file_get_contents("php://input"), true);
-$data = is_array($bodyJson) ? array_merge($_POST, $bodyJson) : $_POST;
+$mw = new FirebaseMiddlewareV2();
+$authUser = $mw->verifyToken(["entrepreneur"]);
+$entrepreneurId = $authUser["uid"];
 
-$required = ['team_id', 'professional_id', 'entrepreneur_id'];
-$missing = array_filter($required, fn($f) => !isset($data[$f]) || $data[$f] === '');
-if (!empty($missing)) {
-    json_response([
-        'success' => false,
-        'error' => 'Missing required fields',
-        'missing' => array_values($missing),
-    ], 400);
+$body = json_decode(file_get_contents("php://input"), true);
+if (!is_array($body)) json_response(["success"=>false,"error"=>"Invalid JSON"], 400);
+
+$required = ["project_id", "professional_id"];
+foreach ($required as $f) {
+  if (!isset($body[$f]) || trim((string)$body[$f]) === "") {
+    json_response(["success"=>false,"error"=>"Missing field: $f"], 422);
+  }
 }
 
-$teamId         = $data['team_id'];
-$professionalId = $data['professional_id'];
-$entrepreneurId = $data['entrepreneur_id'];
-$role           = $data['role'] ?? 'member';
+$projectId = trim($body["project_id"]);
+$professionalId = trim($body["professional_id"]);
+$role = $body["role"] ?? "member";
 
 $firestore = new FirestoreService();
 
-//  Check entrepreneur payment status
-$userDoc = $firestore->collection('entrepreneurs')->document($entrepreneurId)->snapshot();
-if (!$userDoc->exists() || ($userDoc->data()['payment_status'] ?? '') !== 'active') {
-    json_response([
-        'success' => false,
-        'error' => 'Payment required to invite professionals'
-    ], 403);
+// Load project + ownership + unlock check
+$projSnap = $firestore->collection("projects")->document($projectId)->snapshot();
+if (!$projSnap->exists()) json_response(["success"=>false,"error"=>"Project not found"], 404);
+
+$project = $projSnap->data();
+if (($project["entrepreneur_id"] ?? "") !== $entrepreneurId) {
+  json_response(["success"=>false,"error"=>"Forbidden"], 403);
+}
+if (!(bool)($project["unlocked"] ?? false)) {
+  json_response(["success"=>false,"error"=>"Payment required to invite professionals"], 403);
 }
 
-$statuses = require __DIR__ . '/../../enums/team_status_enums.php';
-$statusInvited = $statuses['INVITED'] ?? 'invited';
-
-// Create a new team member invitation
-$membersRef = $firestore->collection('project_team_members');
-$docRef = $membersRef->add([
-    'team_id'         => $teamId,
-    'professional_id' => $professionalId,
-    'entrepreneur_id' => $entrepreneurId,
-    'role'            => $role,
-    'status'          => $statusInvited,
-    'created_at'      => date('c'),
+// Create invite doc
+$ref = $firestore->collection("project_team_members")->add([
+  "project_id" => $projectId,
+  "team_id" => $projectId,
+  "professional_id" => $professionalId,
+  "entrepreneur_id" => $entrepreneurId,
+  "role" => $role,
+  "status" => "invited",
+  "created_at" => date("c"),
 ]);
 
 json_response([
-    'success'        => true,
-    'status'         => $statusInvited,
-    'team_member_id' => $docRef->id(),
+  "success" => true,
+  "team_member_id" => $ref->id(),
+  "status" => "invited"
 ]);
