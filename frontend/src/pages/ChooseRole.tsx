@@ -2,14 +2,21 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function ChooseRole() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [role, setRole] = useState<"entrepreneur" | "professional" | null>(null);
 
   const onContinue = () => {
     if (!role) return toast.error("Please choose a role");
-    navigate(`/signup?role=${role}`);
+
+    if (user) {
+      navigate(`/setup-profile?role=${role}`);
+    } else {
+      navigate(`/signup?role=${role}`);
+    }
   };
 
   return (
@@ -20,13 +27,10 @@ export default function ChooseRole() {
             R
           </div>
           <h1 className="text-3xl font-semibold text-foreground">Join Radah Works</h1>
-          <p className="text-muted-foreground mt-2">
-            Choose how you want to use the platform.
-          </p>
+          <p className="text-muted-foreground mt-2">Choose how you want to use the platform.</p>
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
-          {/* Entrepreneur card (hide if professional selected) */}
           {role !== "professional" && (
             <div className="rounded-2xl border bg-card p-6 shadow-sm">
               <h2 className="text-xl font-semibold">Entrepreneur</h2>
@@ -46,7 +50,6 @@ export default function ChooseRole() {
             </div>
           )}
 
-          {/* Professional card (hide if entrepreneur selected) */}
           {role !== "entrepreneur" && (
             <div className="rounded-2xl border bg-card p-6 shadow-sm">
               <h2 className="text-xl font-semibold">Professional</h2>

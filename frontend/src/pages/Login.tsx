@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Checkbox } from "@/components/ui/checkbox";
 
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
@@ -12,25 +13,43 @@ import { Loader2 } from "lucide-react";
 
 const Login = () => {
   const navigate = useNavigate();
-  const { user, loading, role, signIn, signInWithGoogle } = useAuth();
+  const { user, loading, role, signIn, signInWithGoogle, refreshMe } = useAuth();
 
   const [isLoading, setIsLoading] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
+  const [remember, setRemember] = useState(localStorage.getItem("auth_remember") === "1");
 
   useEffect(() => {
     if (loading) return;
     if (!user) return;
 
-    if (!role) {
-      navigate("/choose-role");
-      return;
-    }
+    // if user exists but role not loaded yet, try refresh once
+    (async () => {
+      try {
+        if (!role) {
+          const me = await refreshMe();
+          const finalRole = me?.role ?? role;
 
-    if (role === "professional") navigate("/professional-dashboard");
-    else if (role === "admin") navigate("/admin");
-    else navigate("/dashboard");
-  }, [user, loading, role, navigate]);
+          if (!finalRole) {
+            navigate("/choose-role");
+            return;
+          }
+
+          if (finalRole === "admin") navigate("/admin");
+          else if (finalRole === "professional") navigate("/professional-dashboard");
+          else navigate("/dashboard");
+          return;
+        }
+
+        if (role === "admin") navigate("/admin");
+        else if (role === "professional") navigate("/professional-dashboard");
+        else navigate("/dashboard");
+      } catch {
+        // If backend is down, don’t force choose-role; show message instead
+      }
+    })();
+  }, [user, loading, role, navigate, refreshMe]);
 
   const validateEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
@@ -41,8 +60,9 @@ const Login = () => {
 
     try {
       setIsLoading(true);
-      await signIn(loginEmail.trim(), loginPassword);
+      await signIn(loginEmail.trim(), loginPassword, remember);
       toast.success("Welcome back");
+      // redirect handled in effect
     } catch (err: any) {
       toast.error(err.message || "Login failed");
     } finally {
@@ -53,15 +73,16 @@ const Login = () => {
   const handleGoogle = async () => {
     try {
       setIsLoading(true);
-      const me = await signInWithGoogle();
+      const me = await signInWithGoogle(remember);
 
+      // if new google user => role null => choose role
       if (!me?.role) {
         navigate("/choose-role");
         return;
       }
 
-      if (me.role === "professional") navigate("/professional-dashboard");
-      else if (me.role === "admin") navigate("/admin");
+      if (me.role === "admin") navigate("/admin");
+      else if (me.role === "professional") navigate("/professional-dashboard");
       else navigate("/dashboard");
     } catch (e: any) {
       toast.error(e.message || "Google sign-in failed");
@@ -93,25 +114,23 @@ const Login = () => {
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
                 <Label>Email</Label>
-                <Input
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  disabled={isLoading}
-                />
+                <Input value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} disabled={isLoading} />
               </div>
 
               <div>
                 <Label>Password</Label>
-                <Input
-                  type="password"
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  disabled={isLoading}
-                />
+                <Input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} disabled={isLoading} />
               </div>
 
-              <div className="flex justify-end text-sm">
-                <Link to="/reset-password" className="text-primary hover:underline">
+              <div className="flex items-center justify-between pt-1">
+                <div className="flex items-center gap-2">
+                  <Checkbox checked={remember} onCheckedChange={(v) => setRemember(Boolean(v))} id="remember" />
+                  <Label htmlFor="remember" className="text-sm">
+                    Remember me
+                  </Label>
+                </div>
+
+                <Link to="/reset-password" className="text-sm text-primary hover:underline">
                   Forgot password?
                 </Link>
               </div>
@@ -121,13 +140,7 @@ const Login = () => {
                 Sign In
               </Button>
 
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                onClick={handleGoogle}
-                disabled={isLoading}
-              >
+              <Button type="button" variant="outline" className="w-full" onClick={handleGoogle} disabled={isLoading}>
                 {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
                 Continue with Google
               </Button>

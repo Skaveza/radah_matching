@@ -1,6 +1,6 @@
 // src/pages/Recommendation.tsx
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, AlertCircle } from "lucide-react";
 import Header from "@/components/landing/Header";
@@ -90,10 +90,12 @@ function mapMemberToRole(m: BackendMember, idx: number): Role {
 export default function Recommendation() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const params = useParams<{ projectId?: string }>();
 
-  // ✅ projectId comes from query OR localStorage fallback
+  // ✅ projectId comes from query OR param OR localStorage fallback
   const projectId =
     searchParams.get("projectId") ||
+    params.projectId ||
     localStorage.getItem("activeProjectId") ||
     "";
 
@@ -116,6 +118,9 @@ export default function Recommendation() {
       try {
         setIsLoading(true);
         setError(null);
+
+        // store for other pages
+        localStorage.setItem("activeProjectId", projectId);
 
         const token = await auth.currentUser?.getIdToken();
         if (!token) throw new Error("Missing auth token");
@@ -200,7 +205,7 @@ export default function Recommendation() {
 
       localStorage.setItem("selectedTeam", JSON.stringify(team));
 
-      // ✅ route in App.tsx is "/team-preview" (no param), so pass projectId via query
+      // ✅ go to preview with query (also works with param route)
       navigate(`/team-preview?projectId=${encodeURIComponent(projectId)}`);
     } catch (e: any) {
       toast.error(e.message || "Failed to save team");

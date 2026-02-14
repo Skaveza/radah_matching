@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams, Link } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import countries from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 
@@ -8,16 +8,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 
 countries.registerLocale(enLocale);
 
-export default function Signup() {
+export default function SetupProfile() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const { signUp } = useAuth();
+  const { user, usersSetup, role: currentRole, loading } = useAuth();
 
   const countryList = useMemo(() => {
     const names = countries.getNames("en", { select: "official" });
@@ -26,51 +25,54 @@ export default function Signup() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [role, setRole] = useState<"entrepreneur" | "professional">("entrepreneur");
-
-  const [signupName, setSignupName] = useState("");
-  const [signupEmail, setSignupEmail] = useState("");
-  const [signupPassword, setSignupPassword] = useState("");
-  const [signupRegion, setSignupRegion] = useState("");
-
-  const [remember, setRemember] = useState(localStorage.getItem("auth_remember") === "1");
+  const [name, setName] = useState("");
+  const [region, setRegion] = useState("");
 
   useEffect(() => {
     const r = params.get("role");
     if (r === "professional" || r === "entrepreneur") setRole(r);
   }, [params]);
 
-  const validateEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  useEffect(() => {
+    if (loading) return;
+    if (!user) navigate("/login");
+  }, [loading, user, navigate]);
 
-  const handleSignup = async (e: React.FormEvent) => {
+  useEffect(() => {
+    // if already has role/profile, go dashboard
+    if (!loading && user && currentRole) {
+      if (currentRole === "admin") navigate("/admin");
+      else if (currentRole === "professional") navigate("/professional-dashboard");
+      else navigate("/dashboard");
+    }
+  }, [loading, user, currentRole, navigate]);
+
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!signupName.trim()) return toast.error("Full name is required");
-    if (!validateEmail(signupEmail)) return toast.error("Enter a valid email address");
-    if (signupPassword.length < 6) return toast.error("Password must be at least 6 characters");
-    if (!signupRegion) return toast.error("Please select your region");
+    if (!name.trim()) return toast.error("Full name is required");
+    if (!region) return toast.error("Please select your region");
 
     try {
       setIsLoading(true);
-
-      await signUp({
-        fullName: signupName.trim(),
-        email: signupEmail.trim(),
-        password: signupPassword,
-        role,
-        region: signupRegion,
-        remember,
-      });
-
-      toast.success("Account created successfully");
+      await usersSetup({ name: name.trim(), role, region });
+      toast.success("Profile setup complete");
 
       if (role === "professional") navigate("/professional-dashboard");
       else navigate("/dashboard");
     } catch (err: any) {
-      toast.error(err?.message || "Signup failed");
+      toast.error(err?.message || "Failed to setup profile");
     } finally {
       setIsLoading(false);
     }
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-background">
@@ -79,11 +81,13 @@ export default function Signup() {
           <div className="mx-auto mb-3 w-12 h-12 rounded-2xl bg-amber-500 flex items-center justify-center text-white font-bold">
             R
           </div>
-          <h1 className="text-2xl font-semibold">Create your account</h1>
-          <p className="text-sm text-muted-foreground mt-1">Sign up to access teams and projects</p>
+          <h1 className="text-2xl font-semibold">Finish setting up your profile</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            We need role + region to personalize your dashboard.
+          </p>
         </div>
 
-        <form onSubmit={handleSignup} className="space-y-4">
+        <form onSubmit={onSubmit} className="space-y-4">
           <div>
             <Label>Role</Label>
             <div className="flex space-x-3 mt-2">
@@ -98,51 +102,29 @@ export default function Signup() {
 
           <div>
             <Label>Full Name</Label>
-            <Input value={signupName} onChange={(e) => setSignupName(e.target.value)} disabled={isLoading} />
-          </div>
-
-          <div>
-            <Label>Email</Label>
-            <Input type="email" value={signupEmail} onChange={(e) => setSignupEmail(e.target.value)} disabled={isLoading} />
-          </div>
-
-          <div>
-            <Label>Password</Label>
-            <Input type="password" value={signupPassword} onChange={(e) => setSignupPassword(e.target.value)} disabled={isLoading} />
+            <Input value={name} onChange={(e) => setName(e.target.value)} disabled={isLoading} placeholder={user?.displayName || "Your name"} />
           </div>
 
           <div>
             <Label>Region</Label>
-            <Select value={signupRegion} onValueChange={setSignupRegion} disabled={isLoading}>
+            <Select value={region} onValueChange={setRegion} disabled={isLoading}>
               <SelectTrigger>
                 <SelectValue placeholder="Select your country" />
               </SelectTrigger>
               <SelectContent className="max-h-64 overflow-y-auto">
-                {countryList.map((country) => (
-                  <SelectItem key={country} value={country}>
-                    {country}
+                {countryList.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
 
-          <div className="flex items-center gap-2 pt-1">
-            <Checkbox checked={remember} onCheckedChange={(v) => setRemember(Boolean(v))} id="remember_signup" />
-            <Label htmlFor="remember_signup" className="text-sm">Remember me</Label>
-          </div>
-
           <Button type="submit" className="w-full" disabled={isLoading}>
             {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-            Create Account
+            Complete Setup
           </Button>
-
-          <p className="text-sm text-center text-muted-foreground">
-            Already have an account?{" "}
-            <Link to="/login" className="text-primary hover:underline">
-              Sign in
-            </Link>
-          </p>
         </form>
       </div>
     </div>

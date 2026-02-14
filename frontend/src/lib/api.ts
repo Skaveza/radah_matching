@@ -1,10 +1,19 @@
 export const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: { ...(options.headers || {}) },
-  });
+  let res: Response;
+
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: { ...(options.headers || {}) },
+    });
+  } catch (e: any) {
+    throw new Error(
+      `Network error: Failed to reach API (${API_BASE}). Is your backend running?\n` +
+        `Details: ${e?.message || "Failed to fetch"}`
+    );
+  }
 
   const text = await res.text();
   const contentType = res.headers.get("content-type") || "";
@@ -15,7 +24,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     try {
       data = JSON.parse(text);
     } catch {
-      // ignore parsing error and handle below
+      // ignore
     }
   }
 

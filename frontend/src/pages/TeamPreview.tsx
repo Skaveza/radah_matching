@@ -1,6 +1,6 @@
 // src/pages/TeamPreview.tsx
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Lock, User, Briefcase, MapPin, Shield, Loader2, Check } from "lucide-react";
 import Header from "@/components/landing/Header";
@@ -30,10 +30,11 @@ const TIERS: { id: Tier; name: string; price: string; priceNote: string; feature
 export default function TeamPreview() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const params = useParams<{ projectId?: string }>();
 
-  // ✅ read from query OR localStorage fallback
   const projectId =
     searchParams.get("projectId") ||
+    params.projectId ||
     localStorage.getItem("activeProjectId") ||
     "";
 
@@ -56,6 +57,9 @@ export default function TeamPreview() {
       try {
         setLoading(true);
 
+        // keep in storage
+        localStorage.setItem("activeProjectId", projectId);
+
         const token = await auth.currentUser?.getIdToken();
         if (!token) throw new Error("Missing auth token");
 
@@ -70,9 +74,49 @@ export default function TeamPreview() {
         });
 
         setUnlocked(!!res.unlocked);
-
         const team = Array.isArray(res.team) ? res.team : [];
-        setRoles(team as Role[]);
+
+        // Your backend team entries might be:
+        // - { professional: {...}, score, debug } OR
+        // - already flattened roles
+        // We normalize to Role[] for UI:
+        const normalized: Role[] = team.map((m: any, idx: number) => {
+          const p = m?.professional ?? m;
+          const debug = m?.debug ?? {};
+          const overlaps: string[] = Array.isArray(debug.cap_overlap) ? debug.cap_overlap : [];
+
+          const skills =
+            typeof p?.skillFocus === "string"
+              ? p.skillFocus.split(",").map((s: string) => s.trim()).filter(Boolean)
+              : Array.isArray(p?.skills)
+                ? p.skills
+                : Array.isArray(p?.core_skills)
+                  ? p.core_skills
+                  : overlaps;
+
+          return {
+            id: p?.id || p?.uid || `${idx}`,
+            title: p?.primary_role || p?.title || "Recommended Specialist",
+            responsibility:
+              p?.professional_summary
+                ? String(p.professional_summary).slice(0, 220)
+                : overlaps.length
+                  ? `Lead delivery around: ${overlaps.join(", ")}.`
+                  : "Lead delivery and execution for this project role.",
+            whyCritical:
+              overlaps.length
+                ? `Strong match on: ${overlaps.slice(0, 4).join(", ")}.`
+                : "Selected as a strong overall match.",
+            experience: p?.years_experience || "—",
+            industry:
+              Array.isArray(p?.industry_experience) && p.industry_experience.length
+                ? p.industry_experience[0]
+                : p?.region || "—",
+            skillFocus: (skills || []).slice(0, 10).join(", "),
+          };
+        });
+
+        setRoles(normalized);
       } catch (e: any) {
         toast.error(e.message || "Failed to load team preview");
       } finally {
@@ -106,7 +150,6 @@ export default function TeamPreview() {
 
       if (!res.url) throw new Error("No Stripe URL returned");
 
-      // Same-tab is usually better for Stripe checkout:
       window.location.href = res.url;
     } catch (e: any) {
       toast.error(e.message || "Failed to start checkout");

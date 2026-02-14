@@ -13,8 +13,8 @@ import { Loader2 } from "lucide-react";
 
 import { auth } from "@/lib/firebase";
 import { apiFetch } from "@/lib/api";
+import { useAuth } from "@/hooks/useAuth";
 
-// ✅ Must match backend enums exactly (professional_enums.php)
 const PRIMARY_ROLES = [
   "technical_lead",
   "full_stack_developer",
@@ -53,26 +53,15 @@ const INDUSTRY_EXPERIENCE = [
 ] as const;
 
 const HOURLY_RATE_RANGE = ["50_75", "75_100", "100_150", "150_200", "200_plus"] as const;
-
 const AVAILABILITY = ["full_time", "part_time", "limited", "project_based"] as const;
 
-// Types derived from enums
-type PrimaryRole = (typeof PRIMARY_ROLES)[number];
-type YearsExperience = (typeof YEARS_EXPERIENCE)[number];
-type IndustryExperience = (typeof INDUSTRY_EXPERIENCE)[number];
-type HourlyRateRange = (typeof HOURLY_RATE_RANGE)[number];
-type Availability = (typeof AVAILABILITY)[number];
-
 type FormState = {
-  primary_role: PrimaryRole | "";
-  years_experience: YearsExperience | "";
-
-  // UI selects one, backend needs array -> we send [industry]
-  industry: IndustryExperience | "";
-
+  primary_role: string;
+  years_experience: string;
+  industry: string; // UI single; backend wants array
   professional_summary: string;
-  hourly_rate_range: HourlyRateRange | "";
-  availability: Availability | "";
+  hourly_rate_range: string;
+  availability: string;
 
   linkedin: string;
   portfolio: string;
@@ -94,89 +83,66 @@ const defaultState: FormState = {
   agree: false,
 };
 
-// ✅ TS-safe label formatting (no replaceAll)
 function prettyLabel(v: string) {
+  // no replaceAll -> supports older TS lib targets
   return v
-    .split("_")
-    .join(" ")
+    .replace(/_/g, " ")
     .replace("aiml", "AI/ML")
     .replace("b2b", "B2B")
     .replace("hr", "HR");
 }
 
-function labelYears(x: string) {
-  return String(x).split("_").join("-").replace("plus", "+");
-}
-
-function labelRate(r: string) {
-  return String(r).split("_").join("-").replace("plus", "+");
-}
-
-// very light phone check: not strict, just avoids empty/garbage
-function phoneLooksOk(phone: string) {
-  const cleaned = phone.replace(/\s+/g, "");
-  // allows +, digits, spaces; requires at least 7 digits
-  const digits = cleaned.replace(/[^\d]/g, "");
-  return digits.length >= 7;
-}
-
-function isValidUrl(u: string) {
+function isValidUrl(s: string) {
   try {
-    const url = new URL(u);
-    return url.protocol === "http:" || url.protocol === "https:";
+    new URL(s);
+    return true;
   } catch {
     return false;
   }
 }
 
-// Sanity-check: make sure selected values are within our enum arrays
-function assertInEnum<T extends readonly string[]>(
-  allowed: T,
-  value: string,
-  field: string
-): asserts value is T[number] {
-  if (!allowed.includes(value)) {
-    throw new Error(
-      `Invalid ${field}. Got "${value}". Allowed: ${allowed.join(", ")}`
-    );
-  }
-}
-
 export default function ProfessionalApplication() {
   const navigate = useNavigate();
+  const { role } = useAuth();
+
   const [formData, setFormData] = useState<FormState>(defaultState);
   const [submitting, setSubmitting] = useState(false);
 
-  const canSubmit = useMemo(() => {
+  const sanity = useMemo(() => {
+    const errors: string[] = [];
+
+    if (!auth.currentUser) errors.push("You are signed out. Please sign in again.");
+    if (role && role !== "professional") errors.push("You must be signed in as a professional to apply.");
+
+    if (!formData.primary_role) errors.push("Primary role is required.");
+    if (!formData.years_experience) errors.push("Years of experience is required.");
+    if (!formData.industry) errors.push("Industry experience is required.");
+    if (!formData.hourly_rate_range) errors.push("Hourly rate range is required.");
+    if (!formData.availability) errors.push("Availability is required.");
+
+    if (formData.professional_summary.trim().length < 20) errors.push("Professional summary must be at least 20 characters.");
+
     const linkedin = formData.linkedin.trim();
-    const phone = formData.phone.trim();
+    if (!linkedin) errors.push("LinkedIn URL is required.");
+    else if (!isValidUrl(linkedin)) errors.push("LinkedIn must be a valid URL (include https://).");
 
-    const linkedinOk = linkedin.length > 0 && isValidUrl(linkedin);
-    const phoneOk = phone.length > 0 && phoneLooksOk(phone);
+    if (!formData.phone.trim()) errors.push("Phone is required.");
 
-    return (
-      formData.primary_role !== "" &&
-      formData.years_experience !== "" &&
-      formData.industry !== "" &&
-      formData.professional_summary.trim().length >= 20 &&
-      formData.hourly_rate_range !== "" &&
-      formData.availability !== "" &&
-      linkedinOk &&
-      phoneOk &&
-      formData.agree &&
-      !submitting
-    );
-  }, [formData, submitting]);
+    if (!formData.agree) errors.push("You must agree before submitting.");
 
-  const onChange = <K extends keyof FormState>(key: K, value: FormState[K]) => {
+    const canSubmit = errors.length === 0 && !submitting;
+    return { canSubmit, errors };
+  }, [formData, submitting, role]);
+
+  const onChange = (key: keyof FormState, value: any) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
   };
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!canSubmit) {
-      toast.error("Please complete all required fields.");
+    if (!sanity.canSubmit) {
+      toast.error(sanity.errors[0] || "Please complete all required fields.");
       return;
     }
 
@@ -186,45 +152,21 @@ export default function ProfessionalApplication() {
       const user = auth.currentUser;
       if (!user) throw new Error("You are signed out. Please sign in again.");
 
-      //  Force refresh token (helps after switching accounts)
+      // force refresh token (helps after account switching)
       const token = await user.getIdToken(true);
       if (!token) throw new Error("Missing auth token. Please sign in again.");
 
-      // Extra sanity checks before sending (prevents confusing 422s)
-      const primary_role = String(formData.primary_role).trim();
-      const years_experience = String(formData.years_experience).trim();
-      const industry = String(formData.industry).trim();
-      const hourly_rate_range = String(formData.hourly_rate_range).trim();
-      const availability = String(formData.availability).trim();
-
-      assertInEnum(PRIMARY_ROLES, primary_role, "primary_role");
-      assertInEnum(YEARS_EXPERIENCE, years_experience, "years_experience");
-      assertInEnum(INDUSTRY_EXPERIENCE, industry, "industry_experience");
-      assertInEnum(HOURLY_RATE_RANGE, hourly_rate_range, "hourly_rate_range");
-      assertInEnum(AVAILABILITY, availability, "availability");
-
-      const linkedin = formData.linkedin.trim();
-      if (!isValidUrl(linkedin)) throw new Error("LinkedIn must be a valid URL (https://...)");
-
-      const phone = formData.phone.trim();
-      if (!phoneLooksOk(phone)) throw new Error("Phone number looks invalid. Please enter a valid number.");
-
-      const portfolio = formData.portfolio.trim();
-      if (portfolio && !isValidUrl(portfolio)) {
-        throw new Error("Portfolio must be a valid URL (https://...) or left empty.");
-      }
-
-      // EXACT backend keys for /api/professionals/apply (matches your updated professionals_apply.php)
+      // ✅ EXACT keys expected by your latest professionals_apply.php
       const payload = {
-        primary_role,
-        years_experience,
-        industry_experience: [industry], // backend requires non-empty array
-        hourly_rate_range,
-        availability,
+        primary_role: formData.primary_role.trim(),
+        years_experience: formData.years_experience.trim(),
+        industry_experience: [formData.industry.trim()],
+        hourly_rate_range: formData.hourly_rate_range.trim(),
+        availability: formData.availability.trim(),
         professional_summary: formData.professional_summary.trim(),
-        linkedin, // required by backend
-        phone, // required by backend
-        portfolio: portfolio || null, //  consistent with backend storage
+        linkedin: formData.linkedin.trim(),
+        phone: formData.phone.trim(),
+        portfolio: formData.portfolio.trim() || null,
       };
 
       await apiFetch("/api/professionals/apply", {
@@ -260,14 +202,22 @@ export default function ProfessionalApplication() {
               </CardHeader>
 
               <CardContent>
+                {sanity.errors.length > 0 && (
+                  <div className="mb-4 rounded-xl border p-3 text-sm">
+                    <p className="font-medium mb-1">Please fix:</p>
+                    <ul className="list-disc pl-5 space-y-1">
+                      {sanity.errors.slice(0, 5).map((e) => (
+                        <li key={e}>{e}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
                 <form onSubmit={onSubmit} className="space-y-5">
                   <div className="grid md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Primary Role *</Label>
-                      <Select
-                        value={formData.primary_role}
-                        onValueChange={(v) => onChange("primary_role", v as FormState["primary_role"])}
-                      >
+                      <Select value={formData.primary_role} onValueChange={(v) => onChange("primary_role", v)}>
                         <SelectTrigger>
                           <SelectValue placeholder="Select role" />
                         </SelectTrigger>
@@ -283,17 +233,14 @@ export default function ProfessionalApplication() {
 
                     <div className="space-y-2">
                       <Label>Years of Experience *</Label>
-                      <Select
-                        value={formData.years_experience}
-                        onValueChange={(v) => onChange("years_experience", v as FormState["years_experience"])}
-                      >
+                      <Select value={formData.years_experience} onValueChange={(v) => onChange("years_experience", v)}>
                         <SelectTrigger>
                           <SelectValue placeholder="Select experience" />
                         </SelectTrigger>
                         <SelectContent>
                           {YEARS_EXPERIENCE.map((x) => (
                             <SelectItem key={x} value={x}>
-                              {labelYears(x)}
+                              {x.replace(/_/g, "-").replace("plus", "+")}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -303,10 +250,7 @@ export default function ProfessionalApplication() {
 
                   <div className="space-y-2">
                     <Label>Industry Experience *</Label>
-                    <Select
-                      value={formData.industry}
-                      onValueChange={(v) => onChange("industry", v as FormState["industry"])}
-                    >
+                    <Select value={formData.industry} onValueChange={(v) => onChange("industry", v)}>
                       <SelectTrigger>
                         <SelectValue placeholder="Select industry" />
                       </SelectTrigger>
@@ -333,17 +277,14 @@ export default function ProfessionalApplication() {
                   <div className="grid md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Hourly Rate Range *</Label>
-                      <Select
-                        value={formData.hourly_rate_range}
-                        onValueChange={(v) => onChange("hourly_rate_range", v as FormState["hourly_rate_range"])}
-                      >
+                      <Select value={formData.hourly_rate_range} onValueChange={(v) => onChange("hourly_rate_range", v)}>
                         <SelectTrigger>
                           <SelectValue placeholder="Select rate range" />
                         </SelectTrigger>
                         <SelectContent>
                           {HOURLY_RATE_RANGE.map((r) => (
                             <SelectItem key={r} value={r}>
-                              {labelRate(r)}
+                              {r.replace(/_/g, "-").replace("plus", "+")}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -352,10 +293,7 @@ export default function ProfessionalApplication() {
 
                     <div className="space-y-2">
                       <Label>Availability *</Label>
-                      <Select
-                        value={formData.availability}
-                        onValueChange={(v) => onChange("availability", v as FormState["availability"])}
-                      >
+                      <Select value={formData.availability} onValueChange={(v) => onChange("availability", v)}>
                         <SelectTrigger>
                           <SelectValue placeholder="Select availability" />
                         </SelectTrigger>
@@ -373,47 +311,28 @@ export default function ProfessionalApplication() {
                   <div className="grid md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>LinkedIn *</Label>
-                      <Input
-                        value={formData.linkedin}
-                        onChange={(e) => onChange("linkedin", e.target.value)}
-                        placeholder="https://linkedin.com/in/..."
-                      />
-                      <p className="text-xs text-muted-foreground">Must be a valid URL (https://...)</p>
+                      <Input value={formData.linkedin} onChange={(e) => onChange("linkedin", e.target.value)} placeholder="https://linkedin.com/in/..." />
                     </div>
 
                     <div className="space-y-2">
                       <Label>Portfolio (optional)</Label>
-                      <Input
-                        value={formData.portfolio}
-                        onChange={(e) => onChange("portfolio", e.target.value)}
-                        placeholder="https://yourportfolio.com"
-                      />
-                      <p className="text-xs text-muted-foreground">If provided, must be a valid URL (https://...)</p>
+                      <Input value={formData.portfolio} onChange={(e) => onChange("portfolio", e.target.value)} placeholder="https://yourportfolio.com" />
                     </div>
                   </div>
 
                   <div className="space-y-2">
                     <Label>Phone *</Label>
-                    <Input
-                      value={formData.phone}
-                      onChange={(e) => onChange("phone", e.target.value)}
-                      placeholder="+250..."
-                    />
-                    <p className="text-xs text-muted-foreground">Include country code if possible.</p>
+                    <Input value={formData.phone} onChange={(e) => onChange("phone", e.target.value)} placeholder="+250..." />
                   </div>
 
                   <div className="flex items-start gap-3 pt-2">
-                    <Checkbox
-                      checked={formData.agree}
-                      onCheckedChange={(v) => onChange("agree", Boolean(v))}
-                      id="agree"
-                    />
+                    <Checkbox checked={formData.agree} onCheckedChange={(v) => onChange("agree", Boolean(v))} id="agree" />
                     <Label htmlFor="agree" className="leading-snug">
                       I confirm the information provided is accurate and I agree to be contacted.
                     </Label>
                   </div>
 
-                  <Button type="submit" className="w-full" disabled={!canSubmit}>
+                  <Button type="submit" className="w-full" disabled={!sanity.canSubmit}>
                     {submitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                     Submit Application
                   </Button>

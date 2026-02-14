@@ -1,6 +1,9 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import {
   User,
+  browserLocalPersistence,
+  browserSessionPersistence,
+  setPersistence,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut as fbSignOut,
@@ -20,6 +23,8 @@ type MeResponse = {
   professional_status?: string | null;
   payment_status?: string | null;
   plan?: string | null;
+  name?: string | null;
+  email?: string | null;
 };
 
 type SignupPayload = {
@@ -28,24 +33,24 @@ type SignupPayload = {
   password: string;
   role: "entrepreneur" | "professional";
   region: string;
+  remember?: boolean;
 };
 
 type AuthContextValue = {
   user: User | null;
   loading: boolean;
 
-  // backend profile
   role: Role;
   professional_status: string | null;
   payment_status: string | null;
   plan: string | null;
 
-  // actions
   refreshMe: () => Promise<MeResponse | null>;
   usersSetup: (payload: { name: string; role: "entrepreneur" | "professional"; region: string }) => Promise<void>;
+
   signUp: (p: SignupPayload) => Promise<void>;
-  signIn: (email: string, password: string) => Promise<void>;
-  signInWithGoogle: () => Promise<MeResponse | null>;
+  signIn: (email: string, password: string, remember?: boolean) => Promise<void>;
+  signInWithGoogle: (remember?: boolean) => Promise<MeResponse | null>;
   signOut: () => Promise<void>;
 };
 
@@ -58,11 +63,19 @@ function getBearerHeaders(token: string, extra?: HeadersInit): HeadersInit {
   };
 }
 
+async function applyPersistence(remember: boolean) {
+  await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
+  localStorage.setItem("auth_remember", remember ? "1" : "0");
+}
+
+function getSavedRemember(): boolean {
+  return localStorage.getItem("auth_remember") === "1";
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(auth.currentUser);
   const [loading, setLoading] = useState(true);
 
-  // backend profile fields
   const [role, setRole] = useState<Role>(null);
   const [professional_status, setProfessionalStatus] = useState<string | null>(null);
   const [payment_status, setPaymentStatus] = useState<string | null>(null);
@@ -77,7 +90,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const refreshMe = async (): Promise<MeResponse | null> => {
-    const token = await auth.currentUser?.getIdToken();
+    const token = await auth.currentUser?.getIdToken().catch(() => null);
     if (!token) return null;
 
     const me = await apiFetch<MeResponse>("/api/me", {
@@ -89,13 +102,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return me;
   };
 
-  // Create/merge user profile in Firestore via your PHP API
-  const usersSetup = async (payload: {
-    name: string;
-    role: "entrepreneur" | "professional";
-    region: string;
-  }) => {
-    const token = await auth.currentUser?.getIdToken();
+  const usersSetup = async (payload: { name: string; role: "entrepreneur" | "professional"; region: string }) => {
+    const token = await auth.currentUser?.getIdToken().catch(() => null);
     const email = auth.currentUser?.email;
 
     if (!token) throw new Error("Missing auth token");
@@ -116,35 +124,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signUp = async (p: SignupPayload) => {
+    await applyPersistence(p.remember ?? getSavedRemember());
+
     const cred = await createUserWithEmailAndPassword(auth, p.email, p.password);
     await updateProfile(cred.user, { displayName: p.fullName });
 
     await usersSetup({ name: p.fullName, role: p.role, region: p.region });
   };
 
-  const signIn = async (email: string, password: string) => {
+  const signIn = async (email: string, password: string, remember = getSavedRemember()) => {
+    await applyPersistence(remember);
     await signInWithEmailAndPassword(auth, email, password);
     await refreshMe();
   };
 
-  /**
-   * Google sign-in does NOT collect role/region.
-   * After sign-in:
-   *  - call /api/me
-   *  - if role is null => you must send user to ChooseRole/Setup screen
-   */
-  const signInWithGoogle = async () => {
+  const signInWithGoogle = async (remember = getSavedRemember()) => {
+    await applyPersistence(remember);
     const provider = new GoogleAuthProvider();
     await signInWithPopup(auth, provider);
-
-    // This may return role=null for a brand new Google user
-    return await refreshMe();
+    return await refreshMe(); // role may still be null for new Google user -> go SetupProfile
   };
 
   const signOut = async () => {
     await fbSignOut(auth);
-
-    // reset backend profile state
     setRole(null);
     setProfessionalStatus(null);
     setPaymentStatus(null);
@@ -157,16 +159,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
 
       if (u) {
-        // load backend role/payment status
-        await refreshMe();
+        // best-effort refresh (don’t crash the app if API is down)
+        try {
+          await refreshMe();
+        } catch {
+          // keep role as-is; UI can show "profile not loaded"
+        }
       } else {
-        // logged out
         setRole(null);
         setProfessionalStatus(null);
         setPaymentStatus(null);
         setPlan(null);
       }
     });
+
     return () => unsub();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
