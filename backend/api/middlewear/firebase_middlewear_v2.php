@@ -11,49 +11,33 @@ class FirebaseMiddlewareV2
 
     public function __construct()
     {
-        /**
-         * Render-safe credential loading:
-         * Priority:
-         * 1) FIREBASE_CREDENTIALS_PATH (file exists on server)
-         * 2) FIREBASE_SERVICE_ACCOUNT_JSON (raw JSON string)
-         * 3) FIREBASE_SERVICE_ACCOUNT_BASE64 (base64(JSON))
-         */
+        // Option 2: Base64 credentials from Render env
+        $base64 = $_ENV['FIREBASE_CREDENTIALS_BASE64'] ?? getenv('FIREBASE_CREDENTIALS_BASE64');
 
-        $credentialsPath = $_ENV['FIREBASE_CREDENTIALS_PATH'] ?? getenv('FIREBASE_CREDENTIALS_PATH');
-        $serviceJson     = $_ENV['FIREBASE_SERVICE_ACCOUNT_JSON'] ?? getenv('FIREBASE_SERVICE_ACCOUNT_JSON');
-        $serviceB64      = $_ENV['FIREBASE_SERVICE_ACCOUNT_BASE64'] ?? getenv('FIREBASE_SERVICE_ACCOUNT_BASE64');
-
-        // 1) Use file path if it exists
-        if ($credentialsPath && file_exists($credentialsPath)) {
-            $factory = (new Factory)->withServiceAccount($credentialsPath);
-            $this->auth = $factory->createAuth();
-            return;
+        if (!$base64) {
+            $this->serverError("Missing FIREBASE_CREDENTIALS_BASE64");
         }
 
-        // 2) Use JSON env var (write temp file)
-        if ($serviceJson && is_string($serviceJson)) {
-            $tmp = $this->writeTempServiceAccount($serviceJson);
-            $factory = (new Factory)->withServiceAccount($tmp);
-            $this->auth = $factory->createAuth();
-            return;
+        $json = base64_decode($base64, true);
+        if (!$json) {
+            $this->serverError("Invalid FIREBASE_CREDENTIALS_BASE64 (not valid base64)");
         }
 
-        // 3) Use base64 env var (decode -> write temp file)
-        if ($serviceB64 && is_string($serviceB64)) {
-            $decoded = base64_decode($serviceB64, true);
-            if (!$decoded) {
-                $this->serverError("FIREBASE_SERVICE_ACCOUNT_BASE64 is not valid base64.");
-            }
-            $tmp = $this->writeTempServiceAccount($decoded);
-            $factory = (new Factory)->withServiceAccount($tmp);
-            $this->auth = $factory->createAuth();
-            return;
+        // Validate JSON structure quickly
+        $data = json_decode($json, true);
+        if (!is_array($data) || empty($data['client_email']) || empty($data['private_key'])) {
+            $this->serverError("Decoded Firebase credentials JSON is invalid (missing client_email/private_key)");
         }
 
-        $this->serverError(
-            "Firebase credentials missing. Set ONE of: " .
-            "FIREBASE_CREDENTIALS_PATH (file on server) OR FIREBASE_SERVICE_ACCOUNT_JSON OR FIREBASE_SERVICE_ACCOUNT_BASE64."
-        );
+        // Write temp credentials file (Render-safe)
+        $tempFile = sys_get_temp_dir() . '/firebase_credentials_' . sha1($data['client_email']) . '.json';
+        if (!file_exists($tempFile)) {
+            file_put_contents($tempFile, $json);
+            @chmod($tempFile, 0600);
+        }
+
+        $factory = (new Factory)->withServiceAccount($tempFile);
+        $this->auth = $factory->createAuth();
     }
 
     public function verifyToken(array $allowedRoles = [], bool $requireProfile = false): array
@@ -102,7 +86,6 @@ class FirebaseMiddlewareV2
         }
 
         // Auto-admin promotion based on env allow-list (secure)
-        // Set ADMIN_EMAILS in .env like: ADMIN_EMAILS=admin@gmail.com,admin2@domain.com
         if (empty($userDoc) && $email && $this->isAdminEmail($email)) {
             $profile = [
                 "uid" => $uid,
@@ -112,7 +95,7 @@ class FirebaseMiddlewareV2
                 "created_at" => date("c"),
                 "updated_at" => date("c"),
                 "payment_status" => "not_required",
-                "plan" => "admin"
+                "plan" => "admin",
             ];
 
             try {
@@ -120,7 +103,7 @@ class FirebaseMiddlewareV2
                 $userDoc = $profile;
                 $role = "admin";
             } catch (\Throwable $e) {
-                // If write fails, still allow token verification, but role stays null
+                // ignore
             }
         }
 
@@ -142,24 +125,6 @@ class FirebaseMiddlewareV2
             "email" => $email,
             "name" => $name,
         ];
-    }
-
-    private function writeTempServiceAccount(string $json): string
-    {
-        $data = json_decode($json, true);
-        if (!is_array($data) || empty($data['client_email']) || empty($data['private_key'])) {
-            $this->serverError("Service account JSON looks invalid (missing client_email/private_key).");
-        }
-
-        $dir = sys_get_temp_dir();
-        $file = $dir . '/firebase_sa_' . sha1($data['client_email']) . '.json';
-
-        if (!file_exists($file)) {
-            file_put_contents($file, $json);
-            @chmod($file, 0600);
-        }
-
-        return $file;
     }
 
     private function isAdminEmail(string $email): bool
