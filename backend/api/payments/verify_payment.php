@@ -1,6 +1,5 @@
 <?php
 require __DIR__ . '/../../bootstrap.php';
-require __DIR__ . '/../../firestore_service.php';
 require __DIR__ . '/../../vendor/autoload.php';
 require __DIR__ . '/../middlewear/firebase_middlewear_v2.php';
 
@@ -25,7 +24,10 @@ if (!is_array($body)) json_response(["success"=>false,"message"=>"Invalid JSON"]
 $sessionId = $body["session_id"] ?? null;
 if (!$sessionId) json_response(["success"=>false,"message"=>"session_id is required"], 422);
 
-Stripe::setApiKey($_ENV["STRIPE_SECRET_KEY"] ?? "");
+$stripeKey = $_ENV["STRIPE_SECRET_KEY"] ?? getenv("STRIPE_SECRET_KEY");
+if (!$stripeKey) json_response(["success"=>false,"message"=>"Missing STRIPE_SECRET_KEY"], 500);
+
+Stripe::setApiKey($stripeKey);
 
 try {
   $session = Session::retrieve($sessionId);
@@ -33,14 +35,13 @@ try {
   json_response(["success"=>false,"message"=>"Invalid Stripe session"], 400);
 }
 
-// Must be paid
-if (($session->payment_status ?? "") !== "paid") {
-  json_response(["success"=>false,"message"=>"Payment not completed"], 400);
-}
+$paymentStatus = $session->payment_status ?? null;
+$mode = $session->mode ?? null;
 
 $meta = (array)($session->metadata ?? []);
 $projectId = $meta["project_id"] ?? null;
 $entrepreneurId = $meta["entrepreneur_id"] ?? null;
+$plan = $meta["plan"] ?? null;
 
 if (!$projectId || !$entrepreneurId) {
   json_response(["success"=>false,"message"=>"Missing metadata"], 400);
@@ -50,42 +51,14 @@ if ($entrepreneurId !== $uid) {
   json_response(["success"=>false,"message"=>"Forbidden"], 403);
 }
 
-$firestore = new FirestoreService();
-
-// Mark project unlocked
-$firestore->collection("projects")->document($projectId)->set([
-  "unlocked" => true,
-  "updated_at" => date("c")
-], ["merge" => true]);
-
-// Mark team unlocked too (optional but recommended)
-$firestore->collection("project_teams")->document($projectId)->set([
-  "locked" => false,
-  "updated_at" => date("c")
-], ["merge" => true]);
-
-// Build unlocked professionals list from stored team
-$teamSnap = $firestore->collection("project_teams")->document($projectId)->snapshot();
-$teamDoc = $teamSnap->exists() ? $teamSnap->data() : [];
-$team = $teamDoc["team"] ?? [];
-
-$professionals = [];
-foreach ($team as $member) {
-  $p = $member["professional"] ?? null;
-  if (!is_array($p)) continue;
-
-  $professionals[] = [
-    "roleTitle" => $p["primary_role"] ?? ($p["title"] ?? "Recommended Specialist"),
-    "name" => $p["name"] ?? ($p["full_name"] ?? "Professional"),
-    "email" => $p["email"] ?? "",
-    "linkedin" => $p["linkedin"] ?? "",
-    "phone" => $p["phone"] ?? null,
-    "portfolio" => $p["portfolio"] ?? null,
-  ];
-}
-
 json_response([
   "success" => true,
-  "teamName" => "Your Team",
-  "professionals" => $professionals
+  "session_id" => $session->id ?? $sessionId,
+  "mode" => $mode,
+  "payment_status" => $paymentStatus,
+  "plan" => $plan,
+  "project_id" => $projectId,
+  "amount_total" => $session->amount_total ?? null,
+  "currency" => $session->currency ?? null,
+  "customer_email" => $session->customer_details->email ?? ($session->customer_email ?? null),
 ]);
