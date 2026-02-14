@@ -97,8 +97,11 @@ interface Professional {
   created_at?: string | null;
 }
 
+/**
+ * ✅ UI-consumed structure (we normalize backend rows into this shape)
+ */
 interface PurchasedTeam {
-  id: string;
+  id: string; // project_id (or other id)
   team_name: string;
   customer_email: string;
   matched_status: string | null;
@@ -159,6 +162,52 @@ function normalizeProfessional(r: AnyRow): Professional {
   };
 }
 
+/**
+ * ✅ Normalize whatever your backend returns into the UI expected PurchasedTeam shape.
+ * Supports backend row shapes like:
+ * - { project_id, project, entrepreneur, team, created_at/updated_at }
+ * - or your older shape { id, team_name, customer_email, professionals }
+ */
+function normalizePurchasedTeam(r: AnyRow): PurchasedTeam {
+  const projectId = String(r.project_id ?? r.id ?? "");
+  const teamArr = Array.isArray(r.team)
+    ? r.team
+    : Array.isArray(r.professionals)
+    ? r.professionals
+    : [];
+
+  const created =
+    String(r.updated_at ?? r.created_at ?? new Date().toISOString());
+
+  const customerEmail =
+    String(r.customer_email ?? r?.entrepreneur?.email ?? r?.project?.entrepreneur_email ?? "");
+
+  const teamName =
+    String(
+      r.team_name ??
+        r?.project?.industry ??
+        r?.project?.title ??
+        r?.project?.name ??
+        "Purchased Team"
+    );
+
+  const matchedStatus =
+    typeof r.matched_status === "string"
+      ? r.matched_status
+      : teamArr.length > 0
+      ? "matched"
+      : "pending";
+
+  return {
+    id: projectId,
+    team_name: teamName,
+    customer_email: customerEmail,
+    matched_status: matchedStatus,
+    created_at: created,
+    professionals: teamArr,
+  };
+}
+
 export default function Admin() {
   const { user, loading: authLoading, role, signOut } = useAuth();
   const navigate = useNavigate();
@@ -196,6 +245,15 @@ export default function Admin() {
     return [];
   };
 
+  // ✅ FIX: support { items: [...] } from backend
+  const unwrapTeams = (res: any): AnyRow[] => {
+    if (Array.isArray(res)) return res;
+    if (Array.isArray(res?.items)) return res.items; // <-- backend format
+    if (Array.isArray(res?.teams)) return res.teams;
+    if (Array.isArray(res?.data)) return res.data;
+    return [];
+  };
+
   const fetchData = async () => {
     setIsLoading(true);
     try {
@@ -222,15 +280,8 @@ export default function Admin() {
           headers: authHeaders,
         });
 
-        const teamsList = Array.isArray(teamsRes)
-          ? teamsRes
-          : Array.isArray(teamsRes?.teams)
-          ? teamsRes.teams
-          : Array.isArray(teamsRes?.data)
-          ? teamsRes.data
-          : [];
-
-        setPurchasedTeams(teamsList);
+        const teamsList = unwrapTeams(teamsRes);
+        setPurchasedTeams(teamsList.map(normalizePurchasedTeam));
       } catch {
         setPurchasedTeams([]);
       }
@@ -655,7 +706,7 @@ export default function Admin() {
                       {purchasedTeams.map((team) => (
                         <TableRow key={team.id}>
                           <TableCell className="font-medium">{team.team_name}</TableCell>
-                          <TableCell>{team.customer_email}</TableCell>
+                          <TableCell>{team.customer_email || "—"}</TableCell>
                           <TableCell>{Array.isArray(team.professionals) ? team.professionals.length : 0}</TableCell>
                           <TableCell>{getMatchStatusBadge(team.matched_status)}</TableCell>
                           <TableCell>{new Date(team.created_at).toLocaleDateString()}</TableCell>
