@@ -6,7 +6,7 @@ require __DIR__ . '/middlewear/firebase_middlewear_v2.php';
 header("Content-Type: application/json");
 
 $mw = new FirebaseMiddlewareV2();
-$authUser = $mw->verifyToken(); // token only; userDoc may be empty
+$authUser = $mw->verifyToken(); // token only
 
 $userDoc = $authUser["userDoc"] ?? [];
 $role = $authUser["role"] ?? ($userDoc["role"] ?? null);
@@ -17,6 +17,11 @@ $plan = $userDoc["plan"] ?? null;
 if ($role === "professional") {
   $paymentStatus = "not_required";
   if ($plan === null) $plan = "professional";
+}
+
+if ($role === "admin") {
+  $paymentStatus = "not_required";
+  if ($plan === null) $plan = "admin";
 }
 
 echo json_encode([

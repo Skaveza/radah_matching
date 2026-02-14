@@ -24,7 +24,6 @@ if (!is_array($body)) json_response(["success"=>false,"error"=>"Invalid JSON"], 
 
 $projectId = $body["project_id"] ?? null;
 $plan = $body["plan"] ?? "starter";
-
 if (!$projectId) json_response(["success"=>false,"error"=>"project_id is required"], 422);
 
 $firestore = new FirestoreService();
@@ -42,7 +41,6 @@ $priceId = match($plan) {
   "membership" => $_ENV["STRIPE_PRICE_MEMBERSHIP"] ?? null,
   default => null
 };
-
 if (!$priceId) json_response(["success"=>false,"error"=>"Invalid plan"], 422);
 
 Stripe::setApiKey($_ENV["STRIPE_SECRET_KEY"] ?? "");
@@ -55,8 +53,8 @@ $session = Session::create([
     "price" => $priceId,
     "quantity" => 1
   ]],
-  "success_url" => $frontend . "/payment-success?session_id={CHECKOUT_SESSION_ID}&projectId=" . $projectId,
-  "cancel_url" => $frontend . "/projects/" . $projectId . "?canceled=1",
+  "success_url" => $frontend . "/payment-success?session_id={CHECKOUT_SESSION_ID}&projectId=" . urlencode($projectId),
+  "cancel_url" => $frontend . "/dashboard?projectId=" . urlencode($projectId) . "&canceled=1",
   "metadata" => [
     "project_id" => $projectId,
     "entrepreneur_id" => $uid,

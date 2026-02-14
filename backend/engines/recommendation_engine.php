@@ -8,7 +8,7 @@ class RecommendationEngine
     {
         $description = $project["description"] ?? "";
         $signals = NLPExtractor::extractAllSignals($description);
-        $projectRegion = $project["region"] ?? null; // NEW
+        $projectRegion = $project["region"] ?? null;
 
         $insights = [];
         $actions = [];

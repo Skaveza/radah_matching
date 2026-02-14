@@ -21,14 +21,6 @@ class FirebaseMiddlewareV2
         $this->auth = $factory->createAuth();
     }
 
-    /**
-     * Verify token + (optionally) require user profile in Firestore.
-     *
-     * Usage:
-     *  - $mw->verifyToken(); // only verifies token, userDoc may be []
-     *  - $mw->verifyToken(["admin"]); // verifies token, requires role + profile
-     *  - $mw->verifyToken([], true); // verifies token, requires profile (role may be null)
-     */
     public function verifyToken(array $allowedRoles = [], bool $requireProfile = false): array
     {
         $authHeader = $this->getAuthorizationHeader();
@@ -47,7 +39,7 @@ class FirebaseMiddlewareV2
 
         $uid = $verifiedToken->claims()->get('sub');
 
-        // Read Firebase user info (helpful for setup)
+        // Firebase user info
         $email = null;
         $name = null;
         try {
@@ -55,14 +47,14 @@ class FirebaseMiddlewareV2
             $email = $fbUser->email ?? null;
             $name = $fbUser->displayName ?? null;
         } catch (\Throwable $e) {
-            // Ignore if user lookup fails
+            // ignore
         }
 
-        // Fetch Firestore profile if exists (DO NOT fail if missing unless required)
         $firestore = new FirestoreService();
         $userDoc = [];
         $role = null;
 
+        // Fetch Firestore profile if exists
         try {
             $snap = $firestore->collection("users")->document($uid)->snapshot();
             if ($snap && $snap->exists()) {
@@ -70,21 +62,39 @@ class FirebaseMiddlewareV2
                 $role = $userDoc["role"] ?? null;
             }
         } catch (\Throwable $e) {
-            // If Firestore is temporarily failing, we still allow token validation
             $userDoc = [];
             $role = null;
         }
 
-        // If endpoint requires profile, enforce it
+        // Auto-admin promotion based on env allow-list (secure)
+        // Set ADMIN_EMAILS in .env like: ADMIN_EMAILS=admin@gmail.com,admin2@domain.com
+        if (empty($userDoc) && $email && $this->isAdminEmail($email)) {
+            $profile = [
+                "uid" => $uid,
+                "email" => $email,
+                "name" => $name,
+                "role" => "admin",
+                "created_at" => date("c"),
+                "updated_at" => date("c"),
+                "payment_status" => "not_required",
+                "plan" => "admin"
+            ];
+
+            try {
+                $firestore->collection("users")->document($uid)->set($profile);
+                $userDoc = $profile;
+                $role = "admin";
+            } catch (\Throwable $e) {
+                // If write fails, still allow token verification, but role will remain null
+            }
+        }
+
         if ($requireProfile && empty($userDoc)) {
             $this->forbidden("User profile not found");
         }
 
-        // If endpoint requires role(s), enforce role existence + allowed roles
         if (!empty($allowedRoles)) {
-            if (!$role) {
-                $this->forbidden("User role missing");
-            }
+            if (!$role) $this->forbidden("User role missing");
             if (!in_array($role, $allowedRoles, true)) {
                 $this->forbidden("Insufficient permissions");
             }
@@ -92,25 +102,34 @@ class FirebaseMiddlewareV2
 
         return [
             "uid" => $uid,
-            "role" => $role,     // can be null if profile not set yet
-            "userDoc" => $userDoc, // can be [] if profile not set yet
+            "role" => $role,
+            "userDoc" => $userDoc,
             "email" => $email,
             "name" => $name,
         ];
     }
 
+    private function isAdminEmail(string $email): bool
+    {
+        $raw = $_ENV["ADMIN_EMAILS"] ?? "";
+        if (!$raw) return false;
+
+        $allowed = array_values(array_filter(array_map("trim", explode(",", $raw))));
+        $emailLower = strtolower(trim($email));
+
+        foreach ($allowed as $a) {
+            if ($a !== "" && strtolower($a) === $emailLower) return true;
+        }
+        return false;
+    }
+
     private function getAuthorizationHeader(): string
     {
-        // Works in Apache + Nginx + PHP built-in server
         $headers = function_exists("getallheaders") ? getallheaders() : [];
         $auth = $headers["Authorization"] ?? $headers["authorization"] ?? null;
 
-        if (!$auth && isset($_SERVER["HTTP_AUTHORIZATION"])) {
-            $auth = $_SERVER["HTTP_AUTHORIZATION"];
-        }
-        if (!$auth && isset($_SERVER["REDIRECT_HTTP_AUTHORIZATION"])) {
-            $auth = $_SERVER["REDIRECT_HTTP_AUTHORIZATION"];
-        }
+        if (!$auth && isset($_SERVER["HTTP_AUTHORIZATION"])) $auth = $_SERVER["HTTP_AUTHORIZATION"];
+        if (!$auth && isset($_SERVER["REDIRECT_HTTP_AUTHORIZATION"])) $auth = $_SERVER["REDIRECT_HTTP_AUTHORIZATION"];
 
         return $auth ?? "";
     }
