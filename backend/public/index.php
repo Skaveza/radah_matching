@@ -37,6 +37,10 @@ $routes = [
   ['POST', '#^/api/verify-user$#', fn() => require __DIR__ . '/../api/verify_user.php'],
   ['POST', '#^/api/users/setup$#', fn() => require __DIR__ . '/../api/users/setup.php'],
 
+  // Admin
+  ['GET', '#^/api/admin/purchased_teams_list$#', fn() => require __DIR__ . '/../api/admin/purchased_teams_list.php'],
+
+
   // Projects
   ['POST', '#^/api/projects$#', fn() => require __DIR__ . '/../api/projects/project_create.php'],
   ['GET',  '#^/api/projects$#', fn() => require __DIR__ . '/../api/projects/projects_get.php'],
