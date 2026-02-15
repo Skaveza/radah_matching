@@ -8,7 +8,8 @@ header("Content-Type: application/json");
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 $allowed = [
   'http://localhost:5173',
-  'http://localhost:8000'
+  'http://localhost:8000',
+  'https://radahworks-frontend.onrender.com'
 ];
 
 if (in_array($origin, $allowed, true)) {
