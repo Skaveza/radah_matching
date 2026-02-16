@@ -16,56 +16,80 @@ $authUser = $mw->verifyToken(); // any logged-in user
 
 $uid = $authUser["uid"];
 $userDoc = $authUser["userDoc"] ?? [];
-
-$role = $userDoc["role"] ?? null;
+$email = $userDoc["email"] ?? null;
 
 $firestore = new FirestoreService();
 $userRef = $firestore->collection("users")->document($uid);
 
-// base upsert (always)
+// -------------------------------
+// Determine role
+// -------------------------------
+$role = $userDoc["role"] ?? null;
+
+// Check if user is already in Firestore admins
+$adminRef = $firestore->collection("admins")->document($uid);
+$adminSnapshot = $adminRef->snapshot();
+
+if (!$adminSnapshot->exists()) {
+    // Admin not yet registered in Firestore
+    // Check if email exists in .env
+    $envAdmins = getenv('ADMIN_EMAILS') ?: '';
+    $envAdmins = array_map('trim', explode(',', $envAdmins));
+
+    if ($email && in_array($email, $envAdmins)) {
+        // Promote to admin in Firestore
+        $role = "admin";
+        $adminRef->set([
+            'uid' => $uid,
+            'email' => $email,
+            'created_at' => date("c")
+        ]);
+    }
+}
+
+// -------------------------------
+//  Prepare user document (merge)
+// -------------------------------
 $baseUpdate = [
-  "email" => $userDoc["email"] ?? null,
-  "name" => $userDoc["name"] ?? null,
-  "role" => $role,
-  "region" => $userDoc["region"] ?? null,
-  "updated_at" => date("c"),
+    "email" => $email ?? null,
+    "name" => $userDoc["name"] ?? null,
+    "role" => $role,
+    "region" => $userDoc["region"] ?? null,
+    "updated_at" => date("c"),
 ];
 
 // entrepreneur-only billing defaults
-$billingDefaults = [];
 if ($role === "entrepreneur") {
-  $billingDefaults = [
-    // choose ONE naming style and keep it consistent everywhere:
-    "payment_status" => $userDoc["payment_status"] ?? "inactive",
-    "plan" => $userDoc["plan"] ?? null,
-
-    // optional stripe fields if you use them
-    "stripe_customer_id" => $userDoc["stripe_customer_id"] ?? null,
-    "stripe_subscription_id" => $userDoc["stripe_subscription_id"] ?? null,
-  ];
+    $billingDefaults = [
+        "payment_status" => $userDoc["payment_status"] ?? "inactive",
+        "plan" => $userDoc["plan"] ?? null,
+        "stripe_customer_id" => $userDoc["stripe_customer_id"] ?? null,
+        "stripe_subscription_id" => $userDoc["stripe_subscription_id"] ?? null,
+    ];
 } else {
-  // professionals do not pay; keep clean
-  $billingDefaults = [
-    "payment_status" => null,
-    "plan" => null,
-    "stripe_customer_id" => null,
-    "stripe_subscription_id" => null,
-  ];
+    $billingDefaults = [
+        "payment_status" => null,
+        "plan" => null,
+        "stripe_customer_id" => null,
+        "stripe_subscription_id" => null,
+    ];
 }
 
 $userRef->set(array_merge($baseUpdate, $billingDefaults), ["merge" => true]);
 
+// -------------------------------
+//  Prepare response
+// -------------------------------
 $response = [
-  "success" => true,
-  "uid" => $uid,
-  "role" => $role,
-  "professional_status" => $userDoc["professional_status"] ?? null,
+    "success" => true,
+    "uid" => $uid,
+    "role" => $role,
+    "professional_status" => $userDoc["professional_status"] ?? null,
 ];
 
-// only return billing fields for entrepreneurs (clean API)
 if ($role === "entrepreneur") {
-  $response["payment_status"] = $billingDefaults["payment_status"];
-  $response["plan"] = $billingDefaults["plan"];
+    $response["payment_status"] = $billingDefaults["payment_status"];
+    $response["plan"] = $billingDefaults["plan"];
 }
 
 json_response($response);
