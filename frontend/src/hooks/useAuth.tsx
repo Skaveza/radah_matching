@@ -39,6 +39,7 @@ type SignupPayload = {
 type AuthContextValue = {
   user: User | null;
   loading: boolean;
+
   role: Role;
   professional_status: string | null;
   payment_status: string | null;
@@ -82,7 +83,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const applyMe = (me: MeResponse | null) => {
     if (!me) return;
-    // backend now guarantees role includes .env admins
     setRole(me.role ?? null);
     setProfessionalStatus(me.professional_status ?? null);
     setPaymentStatus(me.payment_status ?? null);
@@ -135,14 +135,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = async (email: string, password: string, remember = getSavedRemember()) => {
     await applyPersistence(remember);
     await signInWithEmailAndPassword(auth, email, password);
-    await refreshMe(); //role will now be admin if .env admin
+    await refreshMe();
   };
 
   const signInWithGoogle = async (remember = getSavedRemember()) => {
     await applyPersistence(remember);
     const provider = new GoogleAuthProvider();
     await signInWithPopup(auth, provider);
-    return await refreshMe(); // role includes .env admin if matched on backend
+    return await refreshMe(); // role may still be null for new Google user -> go SetupProfile
   };
 
   const signOut = async () => {
@@ -159,10 +159,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
 
       if (u) {
+        // best-effort refresh (don’t crash the app if API is down)
         try {
           await refreshMe();
         } catch {
-          // UI shows profile not loaded
+          // keep role as-is; UI can show "profile not loaded"
         }
       } else {
         setRole(null);
@@ -173,6 +174,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const value = useMemo<AuthContextValue>(
