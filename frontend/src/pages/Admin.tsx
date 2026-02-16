@@ -44,6 +44,7 @@ import {
 
 import { apiFetch } from "@/lib/api";
 import { auth } from "@/lib/firebase";
+import Header from "@/components/landing/Header";
 
 type AnyRow = Record<string, any>;
 
@@ -51,31 +52,23 @@ interface Application {
   id: string;
   name: string;
   email: string;
-
   primary_role?: string | null;
   years_experience?: string | null;
   industry_experience?: string[] | null;
-
   portfolio_url?: string | null;
   linkedin_url?: string | null;
-
   hourly_rate_range?: string | null;
   availability?: string | null;
   professional_summary?: string | null;
-
   approved?: boolean;
   rejected?: boolean;
   status?: string | null;
-
   created_at?: string | null;
   updated_at?: string | null;
-
-  // optional AI fields
   ai_vetting_status?: string | null;
   ai_vetting_score?: number | null;
   ai_vetting_notes?: string | null;
   ai_flagged_as_fake?: boolean | null;
-
   rejection_reason?: string | null;
 }
 
@@ -83,25 +76,18 @@ interface Professional {
   id: string;
   name: string;
   email: string;
-
   primary_role?: string | null;
   years_experience?: string | null;
   industry_experience?: string[] | null;
-
   hourly_rate_range?: string | null;
   availability?: string | null;
-
   status?: string | null;
   approved?: boolean;
-
   created_at?: string | null;
 }
 
-/**
- * ✅ UI-consumed structure (we normalize backend rows into this shape)
- */
 interface PurchasedTeam {
-  id: string; // project_id (or other id)
+  id: string;
   team_name: string;
   customer_email: string;
   matched_status: string | null;
@@ -114,30 +100,23 @@ function normalizeApplication(r: AnyRow): Application {
     id: String(r.id ?? r.uid ?? ""),
     name: String(r.name ?? r.full_name ?? ""),
     email: String(r.email ?? ""),
-
     primary_role: r.primary_role ?? null,
     years_experience: r.years_experience ?? null,
     industry_experience: Array.isArray(r.industry_experience) ? r.industry_experience : null,
-
     portfolio_url: r.portfolio_url ?? r.portfolio ?? null,
     linkedin_url: r.linkedin_url ?? r.linkedin ?? null,
-
     hourly_rate_range: r.hourly_rate_range ?? r.rate_range ?? null,
     availability: r.availability ?? null,
     professional_summary: r.professional_summary ?? r.summary ?? null,
-
     approved: typeof r.approved === "boolean" ? r.approved : undefined,
     rejected: typeof r.rejected === "boolean" ? r.rejected : undefined,
     status: r.status ?? null,
-
     created_at: r.created_at ?? null,
     updated_at: r.updated_at ?? null,
-
     ai_vetting_status: r.ai_vetting_status ?? null,
     ai_vetting_score: typeof r.ai_vetting_score === "number" ? r.ai_vetting_score : null,
     ai_vetting_notes: r.ai_vetting_notes ?? null,
     ai_flagged_as_fake: r.ai_flagged_as_fake ?? null,
-
     rejection_reason: r.rejection_reason ?? null,
   };
 }
@@ -147,27 +126,17 @@ function normalizeProfessional(r: AnyRow): Professional {
     id: String(r.id ?? r.uid ?? ""),
     name: String(r.name ?? r.full_name ?? ""),
     email: String(r.email ?? ""),
-
     primary_role: r.primary_role ?? null,
     years_experience: r.years_experience ?? null,
     industry_experience: Array.isArray(r.industry_experience) ? r.industry_experience : null,
-
     hourly_rate_range: r.hourly_rate_range ?? null,
     availability: r.availability ?? null,
-
     status: r.status ?? null,
     approved: typeof r.approved === "boolean" ? r.approved : undefined,
-
     created_at: r.created_at ?? null,
   };
 }
 
-/**
- * ✅ Normalize whatever your backend returns into the UI expected PurchasedTeam shape.
- * Supports backend row shapes like:
- * - { project_id, project, entrepreneur, team, created_at/updated_at }
- * - or your older shape { id, team_name, customer_email, professionals }
- */
 function normalizePurchasedTeam(r: AnyRow): PurchasedTeam {
   const projectId = String(r.project_id ?? r.id ?? "");
   const teamArr = Array.isArray(r.team)
@@ -175,13 +144,9 @@ function normalizePurchasedTeam(r: AnyRow): PurchasedTeam {
     : Array.isArray(r.professionals)
     ? r.professionals
     : [];
-
-  const created =
-    String(r.updated_at ?? r.created_at ?? new Date().toISOString());
-
+  const created = String(r.updated_at ?? r.created_at ?? new Date().toISOString());
   const customerEmail =
     String(r.customer_email ?? r?.entrepreneur?.email ?? r?.project?.entrepreneur_email ?? "");
-
   const teamName =
     String(
       r.team_name ??
@@ -190,14 +155,12 @@ function normalizePurchasedTeam(r: AnyRow): PurchasedTeam {
         r?.project?.name ??
         "Purchased Team"
     );
-
   const matchedStatus =
     typeof r.matched_status === "string"
       ? r.matched_status
       : teamArr.length > 0
       ? "matched"
       : "pending";
-
   return {
     id: projectId,
     team_name: teamName,
@@ -222,6 +185,12 @@ export default function Admin() {
   const [rejectionReason, setRejectionReason] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
 
+  const [applicationSearch, setApplicationSearch] = useState("");
+  const [professionalSearch, setProfessionalSearch] = useState("");
+
+  const [applicationSort, setApplicationSort] = useState<{ field: keyof Application; direction: "asc" | "desc" }>({ field: "name", direction: "asc" });
+  const [professionalSort, setProfessionalSort] = useState<{ field: keyof Professional; direction: "asc" | "desc" }>({ field: "name", direction: "asc" });
+
   const isAdmin = useMemo(() => role === "admin", [role]);
 
   useEffect(() => {
@@ -230,7 +199,6 @@ export default function Admin() {
 
   useEffect(() => {
     if (isAdmin) fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
   const getAuthHeaders = async (): Promise<Record<string, string>> => {
@@ -245,10 +213,9 @@ export default function Admin() {
     return [];
   };
 
-  // ✅ FIX: support { items: [...] } from backend
   const unwrapTeams = (res: any): AnyRow[] => {
     if (Array.isArray(res)) return res;
-    if (Array.isArray(res?.items)) return res.items; // <-- backend format
+    if (Array.isArray(res?.items)) return res.items;
     if (Array.isArray(res?.teams)) return res.teams;
     if (Array.isArray(res?.data)) return res.data;
     return [];
@@ -257,31 +224,17 @@ export default function Admin() {
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const authHeaders = await getAuthHeaders();
+      const headers = await getAuthHeaders();
 
-      // Pending
-      const pendingRes = await apiFetch<any>("/api/professionals/list-pending", {
-        method: "GET",
-        headers: authHeaders,
-      });
+      const pendingRes = await apiFetch<any>("/api/professionals/list-pending", { method: "GET", headers });
       setApplications(unwrapList(pendingRes).map(normalizeApplication));
 
-      // Approved
-      const approvedRes = await apiFetch<any>("/api/professionals/list-approved", {
-        method: "GET",
-        headers: authHeaders,
-      });
+      const approvedRes = await apiFetch<any>("/api/professionals/list-approved", { method: "GET", headers });
       setProfessionals(unwrapList(approvedRes).map(normalizeProfessional));
 
-      // Purchased teams (optional)
       try {
-        const teamsRes = await apiFetch<any>("/api/admin/purchased_teams_list", {
-          method: "GET",
-          headers: authHeaders,
-        });
-
-        const teamsList = unwrapTeams(teamsRes);
-        setPurchasedTeams(teamsList.map(normalizePurchasedTeam));
+        const teamsRes = await apiFetch<any>("/api/admin/purchased_teams_list", { method: "GET", headers });
+        setPurchasedTeams(unwrapTeams(teamsRes).map(normalizePurchasedTeam));
       } catch {
         setPurchasedTeams([]);
       }
@@ -296,15 +249,9 @@ export default function Admin() {
   const handleApprove = async () => {
     if (!selectedApplication?.id) return;
     setIsProcessing(true);
-
     try {
       const headers = await getAuthHeaders();
-
-      await apiFetch(`/api/professionals/approve?uid=${encodeURIComponent(selectedApplication.id)}`, {
-        method: "POST",
-        headers,
-      });
-
+      await apiFetch(`/api/professionals/approve?uid=${encodeURIComponent(selectedApplication.id)}`, { method: "POST", headers });
       toast.success(`${selectedApplication.name} approved`);
       await fetchData();
     } catch (e: any) {
@@ -320,19 +267,13 @@ export default function Admin() {
   const handleReject = async () => {
     if (!selectedApplication?.id) return;
     setIsProcessing(true);
-
     try {
       const headers = await getAuthHeaders();
-
       await apiFetch(`/api/professionals/reject?uid=${encodeURIComponent(selectedApplication.id)}`, {
         method: "POST",
-        headers: {
-          ...headers,
-          "Content-Type": "application/json",
-        },
+        headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify({ rejection_reason: rejectionReason || "" }),
       });
-
       toast.success("Application rejected");
       await fetchData();
     } catch (e: any) {
@@ -347,15 +288,9 @@ export default function Admin() {
   };
 
   const getStatusBadge = (app: Application) => {
-    if (app.rejected || app.status === "rejected") {
-      return <Badge className="bg-red-500/20 text-red-500">Rejected</Badge>;
-    }
-    if (app.approved || app.status === "approved") {
-      return <Badge className="bg-green-500/20 text-green-500">Approved</Badge>;
-    }
-    if (app.status === "pending_review") {
-      return <Badge className="bg-yellow-500/20 text-yellow-500">Pending Review</Badge>;
-    }
+    if (app.rejected || app.status === "rejected") return <Badge className="bg-red-500/20 text-red-500">Rejected</Badge>;
+    if (app.approved || app.status === "approved") return <Badge className="bg-green-500/20 text-green-500">Approved</Badge>;
+    if (app.status === "pending_review") return <Badge className="bg-yellow-500/20 text-yellow-500">Pending Review</Badge>;
     return <Badge className="bg-yellow-500/20 text-yellow-500">Pending</Badge>;
   };
 
@@ -372,7 +307,6 @@ export default function Admin() {
         </Tooltip>
       );
     }
-
     if (app.ai_flagged_as_fake) {
       return (
         <Tooltip>
@@ -389,7 +323,6 @@ export default function Admin() {
         </Tooltip>
       );
     }
-
     return (
       <Tooltip>
         <TooltipTrigger>
@@ -416,6 +349,46 @@ export default function Admin() {
         return <Badge className="bg-orange-500/20 text-orange-500">Pending</Badge>;
     }
   };
+
+  const pendingCount = applications.length;
+
+  const filteredApplications = useMemo(() => {
+    return applications
+      .filter((app) => {
+        const q = applicationSearch.toLowerCase();
+        return (
+          app.name.toLowerCase().includes(q) ||
+          app.email.toLowerCase().includes(q) ||
+          (app.primary_role ?? "").toLowerCase().includes(q) ||
+          (app.status ?? "").toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const field = applicationSort.field;
+        const dir = applicationSort.direction === "asc" ? 1 : -1;
+        if (!a[field] || !b[field]) return 0;
+        return String(a[field]).localeCompare(String(b[field])) * dir;
+      });
+  }, [applications, applicationSearch, applicationSort]);
+
+  const filteredProfessionals = useMemo(() => {
+    return professionals
+      .filter((pro) => {
+        const q = professionalSearch.toLowerCase();
+        return (
+          pro.name.toLowerCase().includes(q) ||
+          pro.email.toLowerCase().includes(q) ||
+          (pro.primary_role ?? "").toLowerCase().includes(q) ||
+          (pro.status ?? "").toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const field = professionalSort.field;
+        const dir = professionalSort.direction === "asc" ? 1 : -1;
+        if (!a[field] || !b[field]) return 0;
+        return String(a[field]).localeCompare(String(b[field])) * dir;
+      });
+  }, [professionals, professionalSearch, professionalSort]);
 
   if (authLoading) {
     return (
@@ -459,34 +432,13 @@ export default function Admin() {
     );
   }
 
-  const pendingCount = applications.length;
-
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-accent rounded-xl flex items-center justify-center">
-              <span className="text-accent-foreground font-bold">R</span>
-            </div>
-            <div>
-              <h1 className="font-display text-xl font-semibold">Admin Panel</h1>
-              <p className="text-sm text-muted-foreground">Radah Works Management</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="sm" onClick={fetchData}>
-              <RefreshCw className="w-4 h-4 mr-2" />
-              Refresh
-            </Button>
-            <Button variant="ghost" size="sm" onClick={signOut}>
-              <LogOut className="w-4 h-4 mr-2" />
-              Sign Out
-            </Button>
-          </div>
-        </div>
-      </header>
+      {/* Use Header.tsx */}
+      <Header
+        dashboardType="admin"
+        onRefresh={fetchData}
+      />
 
       <main className="container mx-auto px-6 py-8">
         <div className="grid md:grid-cols-3 gap-4 mb-8">
@@ -533,260 +485,184 @@ export default function Admin() {
           </Card>
         </div>
 
-        <Tabs defaultValue="applications">
-          <TabsList className="mb-6">
-            <TabsTrigger value="applications">Applications ({pendingCount})</TabsTrigger>
-            <TabsTrigger value="professionals">Professionals ({professionals.length})</TabsTrigger>
-            <TabsTrigger value="teams">Purchased Teams ({purchasedTeams.length})</TabsTrigger>
+        <Tabs defaultValue="applications" className="w-full">
+          <TabsList>
+            <TabsTrigger value="applications">Applications</TabsTrigger>
+            <TabsTrigger value="professionals">Professionals</TabsTrigger>
+            <TabsTrigger value="purchased">Purchased Teams</TabsTrigger>
           </TabsList>
 
+          {/* ---------- Applications Tab ---------- */}
           <TabsContent value="applications">
-            <Card>
-              <CardHeader>
-                <CardTitle>Pending Professional Applications</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {isLoading ? (
-                  <div className="flex justify-center py-8">
-                    <Loader2 className="w-6 h-6 animate-spin" />
-                  </div>
-                ) : applications.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No pending applications</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Role</TableHead>
-                        <TableHead>Experience</TableHead>
-                        <TableHead>Rate</TableHead>
-                        <TableHead>AI Vetting</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
+            <input
+              type="text"
+              placeholder="Search by name, email, role, status..."
+              className="border rounded px-2 py-1 w-full max-w-sm mb-4"
+              value={applicationSearch}
+              onChange={(e) => setApplicationSearch(e.target.value)}
+            />
 
-                    <TableBody>
-                      {applications.map((app) => (
-                        <TableRow key={app.id} className={app.ai_flagged_as_fake ? "bg-red-500/5" : ""}>
-                          <TableCell>
-                            <div>
-                              <p className="font-medium">{app.name}</p>
-                              <p className="text-sm text-muted-foreground">{app.email}</p>
-                            </div>
-                          </TableCell>
-                          <TableCell>{app.primary_role ?? "—"}</TableCell>
-                          <TableCell>{app.years_experience ?? "—"}</TableCell>
-                          <TableCell>{app.hourly_rate_range ?? "—"}</TableCell>
-                          <TableCell>{getAIVettingBadge(app)}</TableCell>
-                          <TableCell>{getStatusBadge(app)}</TableCell>
-                          <TableCell>
-                            {app.created_at ? new Date(app.created_at).toLocaleDateString() : "—"}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              {app.linkedin_url && (
-                                <Button variant="ghost" size="sm" asChild>
-                                  <a href={app.linkedin_url} target="_blank" rel="noopener noreferrer">
-                                    <ExternalLink className="w-4 h-4" />
-                                  </a>
-                                </Button>
-                              )}
-
-                              <Button
-                                variant="default"
-                                size="sm"
-                                onClick={() => {
-                                  setSelectedApplication(app);
-                                  setActionType("approve");
-                                }}
-                              >
-                                <CheckCircle className="w-4 h-4 mr-1" />
-                                Approve
-                              </Button>
-
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                onClick={() => {
-                                  setSelectedApplication(app);
-                                  setActionType("reject");
-                                }}
-                              >
-                                <XCircle className="w-4 h-4 mr-1" />
-                                Reject
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead
+                    className="cursor-pointer"
+                    onClick={() =>
+                      setApplicationSort((prev) => ({
+                        field: "name",
+                        direction: prev.direction === "asc" ? "desc" : "asc",
+                      }))
+                    }
+                  >
+                    Name
+                  </TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>AI Vetting</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredApplications.map((app) => (
+                  <TableRow key={app.id}>
+                    <TableCell>{app.name}</TableCell>
+                    <TableCell>{app.email}</TableCell>
+                    <TableCell>{app.primary_role}</TableCell>
+                    <TableCell>{getStatusBadge(app)}</TableCell>
+                    <TableCell>{getAIVettingBadge(app)}</TableCell>
+                    <TableCell>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setSelectedApplication(app);
+                          setActionType("approve");
+                        }}
+                      >
+                        Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        className="ml-2"
+                        onClick={() => {
+                          setSelectedApplication(app);
+                          setActionType("reject");
+                        }}
+                      >
+                        Reject
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </TabsContent>
 
+          {/* ---------- Professionals Tab ---------- */}
           <TabsContent value="professionals">
-            <Card>
-              <CardHeader>
-                <CardTitle>Approved Professionals</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {isLoading ? (
-                  <div className="flex justify-center py-8">
-                    <Loader2 className="w-6 h-6 animate-spin" />
-                  </div>
-                ) : professionals.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">
-                    No professionals found (check list-approved query vs approve fields).
-                  </p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Role</TableHead>
-                        <TableHead>Experience</TableHead>
-                        <TableHead>Rate</TableHead>
-                        <TableHead>Availability</TableHead>
-                        <TableHead>Added</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {professionals.map((pro) => (
-                        <TableRow key={pro.id}>
-                          <TableCell>
-                            <div>
-                              <p className="font-medium">{pro.name}</p>
-                              <p className="text-sm text-muted-foreground">{pro.email}</p>
-                            </div>
-                          </TableCell>
-                          <TableCell>{pro.primary_role ?? "—"}</TableCell>
-                          <TableCell>{pro.years_experience ?? "—"}</TableCell>
-                          <TableCell>{pro.hourly_rate_range ?? "—"}</TableCell>
-                          <TableCell>{pro.availability ?? "—"}</TableCell>
-                          <TableCell>
-                            {pro.created_at ? new Date(pro.created_at).toLocaleDateString() : "—"}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+            <input
+              type="text"
+              placeholder="Search by name, email, role, status..."
+              className="border rounded px-2 py-1 w-full max-w-sm mb-4"
+              value={professionalSearch}
+              onChange={(e) => setProfessionalSearch(e.target.value)}
+            />
+
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead
+                    className="cursor-pointer"
+                    onClick={() =>
+                      setProfessionalSort((prev) => ({
+                        field: "name",
+                        direction: prev.direction === "asc" ? "desc" : "asc",
+                      }))
+                    }
+                  >
+                    Name
+                  </TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Years Exp</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredProfessionals.map((pro) => (
+                  <TableRow key={pro.id}>
+                    <TableCell>{pro.name}</TableCell>
+                    <TableCell>{pro.email}</TableCell>
+                    <TableCell>{pro.primary_role}</TableCell>
+                    <TableCell>
+                      {pro.approved ? (
+                        <Badge className="bg-green-500/20 text-green-500">Approved</Badge>
+                      ) : (
+                        <Badge className="bg-yellow-500/20 text-yellow-500">Pending</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>{pro.years_experience ?? "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </TabsContent>
 
-          <TabsContent value="teams">
-            <Card>
-              <CardHeader>
-                <CardTitle>Purchased Teams</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {isLoading ? (
-                  <div className="flex justify-center py-8">
-                    <Loader2 className="w-6 h-6 animate-spin" />
-                  </div>
-                ) : purchasedTeams.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">No purchases yet</p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Team Name</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Roles</TableHead>
-                        <TableHead>Match Status</TableHead>
-                        <TableHead>Date</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {purchasedTeams.map((team) => (
-                        <TableRow key={team.id}>
-                          <TableCell className="font-medium">{team.team_name}</TableCell>
-                          <TableCell>{team.customer_email || "—"}</TableCell>
-                          <TableCell>{Array.isArray(team.professionals) ? team.professionals.length : 0}</TableCell>
-                          <TableCell>{getMatchStatusBadge(team.matched_status)}</TableCell>
-                          <TableCell>{new Date(team.created_at).toLocaleDateString()}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
+          {/* ---------- Purchased Teams Tab ---------- */}
+          <TabsContent value="purchased">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Team Name</TableHead>
+                  <TableHead>Customer Email</TableHead>
+                  <TableHead>Match Status</TableHead>
+                  <TableHead>Created At</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {purchasedTeams.map((team) => (
+                  <TableRow key={team.id}>
+                    <TableCell>{team.team_name}</TableCell>
+                    <TableCell>{team.customer_email}</TableCell>
+                    <TableCell>{getMatchStatusBadge(team.matched_status)}</TableCell>
+                    <TableCell>{team.created_at}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </TabsContent>
         </Tabs>
+
+        {/* ---------- Approve / Reject Dialog ---------- */}
+        <AlertDialog open={actionType !== null} onOpenChange={() => setActionType(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {actionType === "approve" ? "Approve Application?" : "Reject Application?"}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {selectedApplication?.name} ({selectedApplication?.email})
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {actionType === "reject" && (
+              <Textarea
+                placeholder="Reason for rejection"
+                value={rejectionReason}
+                onChange={(e) => setRejectionReason(e.target.value)}
+                className="mb-2"
+              />
+            )}
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={actionType === "approve" ? handleApprove : handleReject} disabled={isProcessing}>
+                {isProcessing ? "Processing..." : actionType === "approve" ? "Approve" : "Reject"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </main>
-
-      {/* Approve dialog */}
-      <AlertDialog open={actionType === "approve"} onOpenChange={() => setActionType(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Approve Application</AlertDialogTitle>
-            <AlertDialogDescription>
-              Approve {selectedApplication?.name}? They will be added to the professionals pool.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isProcessing}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleApprove} disabled={isProcessing}>
-              {isProcessing ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                "Approve"
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Reject dialog */}
-      <AlertDialog open={actionType === "reject"} onOpenChange={() => setActionType(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Reject Application</AlertDialogTitle>
-            <AlertDialogDescription>
-              Reject {selectedApplication?.name}?
-              <br />
-              <span className="text-xs text-muted-foreground">
-                Reason is optional (stored only if your PHP saves it).
-              </span>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-
-          <div className="py-4">
-            <Textarea
-              placeholder="Rejection reason (optional)"
-              value={rejectionReason}
-              onChange={(e) => setRejectionReason(e.target.value)}
-            />
-          </div>
-
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isProcessing}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleReject}
-              disabled={isProcessing}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {isProcessing ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                "Reject"
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
