@@ -1,85 +1,127 @@
-import React from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { useAuth } from "@/hooks/useAuth";
-import { RefreshCw, LogOut } from "lucide-react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Menu, X } from "lucide-react";
 
-interface HeaderProps {
-  dashboardType?: "landing" | "entrepreneur" | "professional" | "admin";
-  onRefresh?: () => void; // optional for admin dashboard
-}
-
-export const Header: React.FC<HeaderProps> = ({ dashboardType = "landing", onRefresh }) => {
-  const { user, signOut } = useAuth();
+const Header = () => {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const location = useLocation();
   const navigate = useNavigate();
 
-  // Determine which links to show
-  const links: { label: string; href: string }[] = [];
-  if (dashboardType === "landing") {
-    links.push(
-      { label: "How It Works", href: "#how-it-works" },
-      { label: "Pricing", href: "#pricing" },
-      { label: "For Professionals", href: "#for-professionals" },
-      { label: "Design My Team", href: "#design-my-team" }
-    );
-  } else if (dashboardType === "entrepreneur") {
-    links.push(
-      { label: "How It Works", href: "#how-it-works" },
-      { label: "Pricing", href: "#pricing" }
-    );
-  } else if (dashboardType === "professional") {
-    links.push(
-      { label: "How It Works", href: "#how-it-works" },
-      { label: "For Professionals", href: "#for-professionals" }
-    );
-  }
+  const scrollToSection = (sectionId: string) => {
+    if (location.pathname !== "/") {
+      navigate("/", { state: { scrollTo: sectionId } });
+    } else {
+      const element = document.getElementById(sectionId);
+      element?.scrollIntoView({ behavior: "smooth" });
+    }
+  };
+
+  const handleMobileNavClick = (sectionId: string) => {
+    setMobileMenuOpen(false);
+    scrollToSection(sectionId);
+  };
 
   return (
-    <header className="border-b border-border bg-card">
-      <div className="container mx-auto px-6 py-4 flex items-center justify-between">
-        {/* Logo */}
-        <Link to="/" className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-accent rounded-xl flex items-center justify-center">
-            <span className="text-accent-foreground font-bold">R</span>
-          </div>
+    <header className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-md border-b border-border/50">
+      <div className="container mx-auto px-6 h-16 flex items-center justify-between">
+        <Link to="/" className="flex items-center gap-2">
+          <img src="/logo.png" alt="Radah Works" className="w-8 h-8 rounded-lg" />
+          <span className="font-display text-xl font-semibold text-foreground">
+            Radah Works
+          </span>
         </Link>
 
-        {/* Navigation links (not for admin) */}
-        {dashboardType !== "admin" && (
-          <nav className="flex items-center gap-6">
-            {links.map((link) => (
-              <a
-                key={link.label}
-                href={link.href}
-                className="text-sm font-medium text-muted-foreground hover:text-foreground"
-              >
-                {link.label}
-              </a>
-            ))}
-          </nav>
-        )}
+        <nav className="hidden md:flex items-center gap-8">
+          <button
+            onClick={() => scrollToSection("how-it-works")}
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            How It Works
+          </button>
+          <button
+            onClick={() => scrollToSection("pricing")}
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Pricing
+          </button>
 
-        {/* Actions: refresh for admin, sign out otherwise */}
-        <div className="flex items-center gap-4">
-          {dashboardType === "admin" && onRefresh && (
-            <Button variant="ghost" size="sm" onClick={onRefresh}>
-              <RefreshCw className="w-4 h-4 mr-2" />
-              Refresh
-            </Button>
-          )}
+          <Link
+            to="/professional-apply"
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            For Professionals
+          </Link>
+        </nav>
 
-          {user ? (
-            <Button variant="ghost" size="sm" onClick={signOut}>
-              <LogOut className="w-4 h-4 mr-2" />
-              Sign Out
-            </Button>
-          ) : (
-            <Button variant="ghost" size="sm" onClick={() => navigate("/login")}>
-              Sign In
-            </Button>
-          )}
+        <div className="hidden md:flex items-center gap-3">
+          <Button variant="ghost" size="sm" asChild>
+            <Link to="/login">Sign In</Link>
+          </Button>
+          <Button variant="premium" size="sm" asChild>
+            <Link to="/intake">Design My Team</Link>
+          </Button>
         </div>
+
+        {/* Mobile Menu Button */}
+        <button
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className="md:hidden p-2 text-foreground hover:text-primary transition-colors"
+          aria-label="Toggle menu"
+        >
+          {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
+        </button>
       </div>
+
+      {/* Mobile Menu Overlay */}
+      {mobileMenuOpen && (
+        <div className="md:hidden fixed inset-0 top-16 z-50 bg-background border-t border-border shadow-xl animate-in slide-in-from-top-2 fade-in duration-200">
+          <nav className="flex flex-col p-6 gap-4 bg-background">
+            <button
+              onClick={() => handleMobileNavClick("how-it-works")}
+              className="text-left text-lg font-medium text-foreground hover:text-accent transition-colors py-3 border-b border-border/30 animate-in fade-in slide-in-from-top-1 duration-200"
+              style={{ animationDelay: "50ms" }}
+            >
+              How It Works
+            </button>
+
+            <button
+              onClick={() => handleMobileNavClick("pricing")}
+              className="text-left text-lg font-medium text-foreground hover:text-accent transition-colors py-3 border-b border-border/30 animate-in fade-in slide-in-from-top-1 duration-200"
+              style={{ animationDelay: "100ms" }}
+            >
+              Pricing
+            </button>
+
+            {/* ✅ FIX: was /professionals (404) */}
+            <Link
+              to="/professional-apply"
+              onClick={() => setMobileMenuOpen(false)}
+              className="text-lg font-medium text-foreground hover:text-accent transition-colors py-3 border-b border-border/30 animate-in fade-in slide-in-from-top-1 duration-200"
+              style={{ animationDelay: "150ms" }}
+            >
+              For Professionals
+            </Link>
+
+            <div
+              className="pt-4 mt-2 flex flex-col gap-3 animate-in fade-in slide-in-from-top-1 duration-200"
+              style={{ animationDelay: "200ms" }}
+            >
+              <Button variant="outline" size="lg" asChild className="justify-center">
+                <Link to="/login" onClick={() => setMobileMenuOpen(false)}>
+                  Sign In
+                </Link>
+              </Button>
+
+              <Button variant="premium" size="lg" asChild className="justify-center">
+                <Link to="/intake" onClick={() => setMobileMenuOpen(false)}>
+                  Design My Team
+                </Link>
+              </Button>
+            </div>
+          </nav>
+        </div>
+      )}
     </header>
   );
 };

@@ -4,7 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, LogOut, FileText, Users, ArrowRight, Unlock, Lock, Eye } from "lucide-react";
-import Header from "@/components/landing/Header"; // updated header
+import Header from "@/components/landing/Header";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { apiFetch } from "@/lib/api";
@@ -24,12 +24,10 @@ export default function EntrepreneurDashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  // Redirect if not logged in
   useEffect(() => {
     if (!authLoading && !user) navigate("/login");
   }, [authLoading, user, navigate]);
 
-  // Fetch projects
   useEffect(() => {
     const fetchProjects = async () => {
       if (!user) return;
@@ -55,7 +53,6 @@ export default function EntrepreneurDashboard() {
     if (user) fetchProjects();
   }, [user]);
 
-  // Sign out
   const handleSignOut = async () => {
     await signOut();
     navigate("/");
@@ -72,20 +69,16 @@ export default function EntrepreneurDashboard() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Updated header */}
-      <Header dashboardType="entrepreneur" />
+      <Header />
 
       <main className="pt-32 pb-20">
         <div className="container mx-auto px-6">
           <div className="max-w-5xl mx-auto">
-            {/* Welcome section */}
             <div className="flex items-center justify-between mb-10">
               <div>
-                <h1 className="font-display text-3xl font-bold text-foreground mb-2">
-                  Welcome {user?.displayName || user?.email}
-                </h1>
+                <h1 className="font-display text-3xl font-bold text-foreground mb-2">Your Dashboard</h1>
                 <p className="text-muted-foreground">
-                  This is your entrepreneur dashboard.
+                  Welcome back, {user?.displayName || user?.email}
                 </p>
               </div>
 
@@ -104,7 +97,6 @@ export default function EntrepreneurDashboard() {
               </div>
             </div>
 
-            {/* Project Tabs */}
             {isLoading ? (
               <div className="flex items-center justify-center py-20">
                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -164,7 +156,6 @@ export default function EntrepreneurDashboard() {
   );
 }
 
-// Single project card
 function ProjectCard({
   row,
   isExpanded,
@@ -253,7 +244,6 @@ function ProjectCard({
   );
 }
 
-// Empty state
 function EmptyState() {
   return (
     <div className="text-center py-16 px-6 bg-card rounded-2xl border border-dashed border-border">
