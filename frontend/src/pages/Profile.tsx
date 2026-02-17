@@ -25,18 +25,23 @@ export default function Profile() {
   const load = async () => {
     try {
       setLoading(true);
-      const token = await auth.currentUser?.getIdToken();
-      if (!token) throw new Error("Not authenticated");
+
+      const token = await auth.currentUser?.getIdToken().catch(() => null);
+      if (!token) {
+        toast.error("Please sign in again.");
+        setMe(null);
+        return;
+      }
 
       const res = await apiFetch<MeResponse>("/api/me", {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      if (!res.success) throw new Error("Failed to load profile");
+      if (!res?.success) throw new Error("Failed to load profile");
       setMe(res);
     } catch (e: any) {
-      toast.error(e.message || "Failed to load profile");
+      toast.error(e?.message || "Failed to load profile");
     } finally {
       setLoading(false);
     }
@@ -66,9 +71,7 @@ export default function Profile() {
           <div className="max-w-4xl mx-auto">
             <div className="mb-10">
               <h1 className="font-display text-3xl font-bold text-foreground mb-2">Profile</h1>
-              <p className="text-muted-foreground">
-                Manage your account details and role access.
-              </p>
+              <p className="text-muted-foreground">View your account details and access status.</p>
             </div>
 
             {/* premium header card */}
@@ -82,9 +85,7 @@ export default function Profile() {
                   <div className="font-display text-2xl font-bold">
                     {me?.name || me?.email || "Your Account"}
                   </div>
-                  <div className="text-primary-foreground/70 mt-1">
-                    {me?.email || "—"}
-                  </div>
+                  <div className="text-primary-foreground/70 mt-1">{me?.email || "—"}</div>
 
                   <div className="flex flex-wrap gap-2 mt-4">
                     <Pill icon={<ShieldCheck className="w-3.5 h-3.5" />} label={`Role: ${me?.role || "—"}`} />
@@ -93,7 +94,11 @@ export default function Profile() {
                   </div>
                 </div>
 
-                <Button variant="outline" className="bg-transparent border-primary-foreground/20 text-primary-foreground hover:bg-primary-foreground/10" onClick={load}>
+                <Button
+                  variant="outline"
+                  className="bg-transparent border-primary-foreground/20 text-primary-foreground hover:bg-primary-foreground/10"
+                  onClick={load}
+                >
                   Refresh
                 </Button>
               </div>

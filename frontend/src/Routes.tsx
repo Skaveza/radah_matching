@@ -5,12 +5,10 @@ import Index from "@/pages/Index";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import ChooseRole from "@/pages/ChooseRole";
-import SetupProfile from "@/pages/SetupProfile";
 import Profile from "@/pages/Profile";
 
 import Dashboard from "@/pages/EntrepreneurDashboard";
 import ProfessionalDashboard from "@/pages/ProfessionalDashboard";
-import ProfessionalLogin from "@/pages/ProfessionalLogin";
 import ProfessionalApplication from "@/pages/ProfessionalApplication";
 
 import Intake from "@/pages/Intake";
@@ -37,10 +35,12 @@ const ProtectedRoute = ({
   if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
   if (!user) return <Navigate to="/login" replace />;
 
-  // If role missing, send to choose role (choose-role will route to setup-profile for signed-in users)
+  // role must be set for any protected page
   if (!userRole) return <Navigate to="/choose-role" replace />;
 
+  // role-based lock
   if (role && userRole !== role) return <Navigate to="/" replace />;
+
   return children;
 };
 
@@ -52,8 +52,17 @@ export default function AppRoutes() {
         <Route path="/" element={<Index />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
-        <Route path="/choose-role" element={<ChooseRole />} />
-        <Route path="/setup-profile" element={<SetupProfile />} />
+
+        {/* Choose role (logged-in only) */}
+        <Route
+          path="/choose-role"
+          element={
+            <ProtectedRoute>
+              <ChooseRole />
+            </ProtectedRoute>
+          }
+        />
+
         <Route path="/terms" element={<Terms />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/reset-password" element={<ResetPassword />} />
@@ -70,7 +79,6 @@ export default function AppRoutes() {
         />
 
         {/* Professional */}
-        <Route path="/professional-login" element={<ProfessionalLogin />} />
         <Route path="/professional-apply" element={<ProfessionalApplication />} />
         <Route
           path="/professional-dashboard"
@@ -99,7 +107,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* ✅ Team builder supports both query + param */}
+        {/* Team Builder */}
         <Route
           path="/team-builder"
           element={
@@ -117,7 +125,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* ✅ Team preview supports both query + param */}
+        {/* Team Preview */}
         <Route
           path="/team-preview"
           element={
@@ -135,7 +143,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* Admin */}
+        {/* Admin (NOT public — only works if backend assigns admin role) */}
         <Route
           path="/admin"
           element={
@@ -148,6 +156,7 @@ export default function AppRoutes() {
         {/* Payments */}
         <Route path="/payment-success" element={<PaymentSuccess />} />
 
+        {/* 404 */}
         <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>

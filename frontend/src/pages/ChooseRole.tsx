@@ -6,16 +6,22 @@ import { useAuth } from "@/hooks/useAuth";
 
 export default function ChooseRole() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, saveRole } = useAuth();
   const [role, setRole] = useState<"entrepreneur" | "professional" | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const onContinue = () => {
+  const onContinue = async () => {
     if (!role) return toast.error("Please choose a role");
+    if (!user) return navigate("/signup", { replace: true });
 
-    if (user) {
-      navigate(`/setup-profile?role=${role}`);
-    } else {
-      navigate(`/signup?role=${role}`);
+    try {
+      setLoading(true);
+      await saveRole(role);
+      navigate(role === "entrepreneur" ? "/dashboard" : "/professional-dashboard", { replace: true });
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to save role");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -43,6 +49,7 @@ export default function ChooseRole() {
                   className="w-full"
                   variant={role === "entrepreneur" ? "default" : "outline"}
                   onClick={() => setRole("entrepreneur")}
+                  disabled={loading}
                 >
                   Select Entrepreneur
                 </Button>
@@ -62,6 +69,7 @@ export default function ChooseRole() {
                   className="w-full"
                   variant={role === "professional" ? "default" : "outline"}
                   onClick={() => setRole("professional")}
+                  disabled={loading}
                 >
                   Select Professional
                 </Button>
@@ -72,12 +80,12 @@ export default function ChooseRole() {
 
         <div className="mt-6 flex gap-3">
           {role && (
-            <Button variant="outline" className="flex-1" onClick={() => setRole(null)}>
+            <Button variant="outline" className="flex-1" onClick={() => setRole(null)} disabled={loading}>
               Change choice
             </Button>
           )}
-          <Button className="flex-1" onClick={onContinue}>
-            Continue
+          <Button className="flex-1" onClick={onContinue} disabled={loading}>
+            {loading ? "Saving..." : "Continue"}
           </Button>
         </div>
       </div>

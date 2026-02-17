@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams, Link } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { useNavigate, Link } from "react-router-dom";
 import countries from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 
@@ -16,7 +16,6 @@ countries.registerLocale(enLocale);
 
 export default function Signup() {
   const navigate = useNavigate();
-  const [params] = useSearchParams();
   const { signUp } = useAuth();
 
   const countryList = useMemo(() => {
@@ -25,7 +24,6 @@ export default function Signup() {
   }, []);
 
   const [isLoading, setIsLoading] = useState(false);
-  const [role, setRole] = useState<"entrepreneur" | "professional">("entrepreneur");
 
   const [signupName, setSignupName] = useState("");
   const [signupEmail, setSignupEmail] = useState("");
@@ -33,11 +31,6 @@ export default function Signup() {
   const [signupRegion, setSignupRegion] = useState("");
 
   const [remember, setRemember] = useState(localStorage.getItem("auth_remember") === "1");
-
-  useEffect(() => {
-    const r = params.get("role");
-    if (r === "professional" || r === "entrepreneur") setRole(r);
-  }, [params]);
 
   const validateEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
@@ -56,15 +49,12 @@ export default function Signup() {
         fullName: signupName.trim(),
         email: signupEmail.trim(),
         password: signupPassword,
-        role,
         region: signupRegion,
         remember,
       });
 
       toast.success("Account created successfully");
-
-      if (role === "professional") navigate("/professional-dashboard");
-      else navigate("/dashboard");
+      navigate("/choose-role", { replace: true });
     } catch (err: any) {
       toast.error(err?.message || "Signup failed");
     } finally {
@@ -84,18 +74,6 @@ export default function Signup() {
         </div>
 
         <form onSubmit={handleSignup} className="space-y-4">
-          <div>
-            <Label>Role</Label>
-            <div className="flex space-x-3 mt-2">
-              <Button type="button" variant={role === "entrepreneur" ? "default" : "outline"} onClick={() => setRole("entrepreneur")} disabled={isLoading} className="flex-1">
-                Entrepreneur
-              </Button>
-              <Button type="button" variant={role === "professional" ? "default" : "outline"} onClick={() => setRole("professional")} disabled={isLoading} className="flex-1">
-                Professional
-              </Button>
-            </div>
-          </div>
-
           <div>
             <Label>Full Name</Label>
             <Input value={signupName} onChange={(e) => setSignupName(e.target.value)} disabled={isLoading} />

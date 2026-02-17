@@ -1,3 +1,4 @@
+// src/pages/Login.tsx
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 
@@ -24,29 +25,21 @@ const Login = () => {
     if (loading) return;
     if (!user) return;
 
-    // if user exists but role not loaded yet, try refresh once
     (async () => {
       try {
-        if (!role) {
-          const me = await refreshMe();
-          const finalRole = me?.role ?? role;
+        const me = role ? null : await refreshMe();
+        const finalRole = role ?? me?.role ?? null;
 
-          if (!finalRole) {
-            navigate("/choose-role");
-            return;
-          }
-
-          if (finalRole === "admin") navigate("/admin");
-          else if (finalRole === "professional") navigate("/professional-dashboard");
-          else navigate("/dashboard");
+        if (!finalRole) {
+          navigate("/choose-role", { replace: true });
           return;
         }
 
-        if (role === "admin") navigate("/admin");
-        else if (role === "professional") navigate("/professional-dashboard");
-        else navigate("/dashboard");
+        if (finalRole === "admin") navigate("/admin", { replace: true });
+        else if (finalRole === "professional") navigate("/professional-dashboard", { replace: true });
+        else navigate("/dashboard", { replace: true });
       } catch {
-        // If backend is down, don’t force choose-role; show message instead
+        // backend down; stay here
       }
     })();
   }, [user, loading, role, navigate, refreshMe]);
@@ -75,15 +68,14 @@ const Login = () => {
       setIsLoading(true);
       const me = await signInWithGoogle(remember);
 
-      // if new google user => role null => choose role
       if (!me?.role) {
-        navigate("/choose-role");
+        navigate("/choose-role", { replace: true });
         return;
       }
 
-      if (me.role === "admin") navigate("/admin");
-      else if (me.role === "professional") navigate("/professional-dashboard");
-      else navigate("/dashboard");
+      if (me.role === "admin") navigate("/admin", { replace: true });
+      else if (me.role === "professional") navigate("/professional-dashboard", { replace: true });
+      else navigate("/dashboard", { replace: true });
     } catch (e: any) {
       toast.error(e.message || "Google sign-in failed");
     } finally {
@@ -105,7 +97,9 @@ const Login = () => {
         <Tabs defaultValue="login">
           <TabsList className="grid grid-cols-2 mb-6 relative z-10">
             <TabsTrigger value="login">Sign In</TabsTrigger>
-            <TabsTrigger value="signup" onClick={() => navigate("/choose-role")}>
+
+            {/* ✅ Logged-out users must go to /signup (not /choose-role) */}
+            <TabsTrigger value="signup" onClick={() => navigate("/signup")}>
               Sign Up
             </TabsTrigger>
           </TabsList>
