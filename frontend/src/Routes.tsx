@@ -1,5 +1,5 @@
 // src/Routes.tsx
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -26,16 +26,39 @@ import UpdatePassword from "@/pages/UpdatePassword";
 import NotFound from "@/pages/NotFound";
 
 type Role = "entrepreneur" | "professional" | "admin" | null;
+type RoleState = Role | undefined; // undefined = still checking
 
+/**
+ * RequireAuth
+ * - Waits for auth initialization
+ * - If not logged in, redirects to /login
+ * - Saves "from" path so you can send the user back after login (optional)
+ */
 const RequireAuth = ({ children }: { children: JSX.Element }) => {
   const { user, loading } = useAuth();
+  const location = useLocation();
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
-  if (!user) return <Navigate to="/login" replace />;
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
 
   return children;
 };
 
+/**
+ * RequireRole
+ * - Prevents wrong redirects on refresh by using 3-state role resolution:
+ *   undefined = still checking
+ *   null      = confirmed missing
+ *   "role"    = confirmed role
+ *
+ * - If role is missing, redirects to /choose-role
+ * - If role doesn't match required role, redirects to /
+ */
 const RequireRole = ({
   children,
   role,
@@ -45,43 +68,42 @@ const RequireRole = ({
 }) => {
   const { user, loading, role: userRole, refreshMe } = useAuth();
 
-  const [checkedRole, setCheckedRole] = useState(false);
-  const [resolvedRole, setResolvedRole] = useState<Role>(userRole);
+  // Start as "checking" (undefined) instead of assuming missing (null)
+  const [resolvedRole, setResolvedRole] = useState<RoleState>(undefined);
 
   useEffect(() => {
     let mounted = true;
 
     const run = async () => {
+      // Wait for auth init
       if (loading) return;
 
       // Not logged in
       if (!user) {
-        if (mounted) {
-          setResolvedRole(null);
-          setCheckedRole(true);
-        }
+        if (mounted) setResolvedRole(null);
         return;
       }
 
-      // Role already known in context
+      // Role already in context
       if (userRole) {
-        if (mounted) {
-          setResolvedRole(userRole);
-          setCheckedRole(true);
-        }
+        if (mounted) setResolvedRole(userRole as Role);
         return;
       }
 
-      // Try once to fetch role from backend (/api/me)
+      // Role unknown -> fetch it (keep "checking" while fetching)
+      if (mounted) setResolvedRole(undefined);
+
       try {
         const me = await refreshMe();
         if (mounted) setResolvedRole((me?.role ?? null) as Role);
       } catch {
-        // If backend fails temporarily, don't loop /choose-role infinitely.
-        // We'll treat it as missing and allow choose-role redirect below.
-        if (mounted) setResolvedRole(null);
-      } finally {
-        if (mounted) setCheckedRole(true);
+        /**
+         * IMPORTANT:
+         * If backend call fails temporarily (network, cold start, etc),
+         * do NOT treat it as "missing role" and redirect away.
+         * Keep it in "checking" state to avoid bouncing to /choose-role.
+         */
+        if (mounted) setResolvedRole(undefined);
       }
     };
 
@@ -91,16 +113,18 @@ const RequireRole = ({
     };
   }, [user, loading, userRole, refreshMe]);
 
-  if (loading || !checkedRole) {
+  // Still resolving auth or role -> show loader and do NOT redirect yet
+  if (loading || resolvedRole === undefined) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
   }
 
+  // Not logged in
   if (!user) return <Navigate to="/login" replace />;
 
-  // If logged in but role truly missing -> choose-role
-  if (!resolvedRole) return <Navigate to="/choose-role" replace />;
+  // Logged in, but confirmed missing role
+  if (resolvedRole === null) return <Navigate to="/choose-role" replace />;
 
-  // If route requires a specific role, enforce it
+  // Enforce required role
   if (role && resolvedRole !== role) return <Navigate to="/" replace />;
 
   return children;
@@ -110,11 +134,20 @@ export default function AppRoutes() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Public */}
         <Route path="/" element={<Index />} />
 
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
 
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/update-password" element={<UpdatePassword />} />
+
+        <Route path="/payment-success" element={<PaymentSuccess />} />
+
+        {/* Auth required */}
         <Route
           path="/choose-role"
           element={
@@ -123,11 +156,6 @@ export default function AppRoutes() {
             </RequireAuth>
           }
         />
-
-        <Route path="/terms" element={<Terms />} />
-        <Route path="/privacy" element={<Privacy />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
-        <Route path="/update-password" element={<UpdatePassword />} />
 
         <Route
           path="/profile"
@@ -138,6 +166,7 @@ export default function AppRoutes() {
           }
         />
 
+        {/* Role-protected */}
         <Route
           path="/professional-apply"
           element={
@@ -217,8 +246,7 @@ export default function AppRoutes() {
           }
         />
 
-        <Route path="/payment-success" element={<PaymentSuccess />} />
-
+        {/* 404 */}
         <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>
