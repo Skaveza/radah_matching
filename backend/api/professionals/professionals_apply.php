@@ -26,14 +26,46 @@ function require_field(array $body, string $field) {
 }
 
 $mw = new FirebaseMiddlewareV2();
-$authUser = $mw->verifyToken(["professional"]);
+
+// IMPORTANT: don't require role at middleware stage
+$authUser = $mw->verifyToken();
 $uid = $authUser["uid"];
 $userDoc = $authUser["userDoc"] ?? [];
+$role = $authUser["role"] ?? null;
+
+$firestore = new FirestoreService();
+$now = date("c");
+
+// Ensure user has role professional
+if ($role === null) {
+  // user doc missing or role missing -> set professional now
+  $email = trim($authUser["email"] ?? "");
+  $name  = $authUser["name"] ?? null;
+
+  if ($email === "") {
+    json_response(["success" => false, "error" => "Missing email from Firebase user"], 422);
+  }
+
+  $firestore->collection("users")->document($uid)->set([
+    "uid" => $uid,
+    "email" => $email,
+    "name" => $name,
+    "role" => "professional",
+    "professional_status" => "pending",
+    "updated_at" => $now,
+    "created_at" => $now,
+  ], ["merge" => true]);
+
+  $role = "professional";
+}
+
+if ($role !== "professional") {
+  json_response(["success" => false, "error" => "Only professionals can apply"], 403);
+}
 
 $body = json_decode(file_get_contents("php://input"), true);
 if (!is_array($body)) json_response(["success"=>false,"error"=>"Invalid JSON"], 400);
 
-// Make linkedin + phone required
 $required = [
   "primary_role",
   "years_experience",
@@ -69,7 +101,6 @@ foreach ($industry_experience as $ind) {
   must_be_in(ProfessionalEnums::$INDUSTRY_EXPERIENCE, $ind, "industry_experience");
 }
 
-// basic URL check for linkedin (optional stricter)
 $linkedin = trim((string)$body["linkedin"]);
 if (!filter_var($linkedin, FILTER_VALIDATE_URL)) {
   json_response(["success"=>false,"error"=>"linkedin must be a valid URL"], 422);
@@ -77,14 +108,10 @@ if (!filter_var($linkedin, FILTER_VALIDATE_URL)) {
 
 $phone = trim((string)$body["phone"]);
 
-$firestore = new FirestoreService();
-$now = date("c");
-
-// Save professionals/{uid}
 $firestore->collection("professionals")->document($uid)->set([
   "uid" => $uid,
-  "name" => $userDoc["name"] ?? null,
-  "email" => $userDoc["email"] ?? null,
+  "name" => $userDoc["name"] ?? ($authUser["name"] ?? null),
+  "email" => $userDoc["email"] ?? ($authUser["email"] ?? null),
   "region" => $userDoc["region"] ?? null,
 
   "primary_role" => $primary_role,
@@ -94,7 +121,6 @@ $firestore->collection("professionals")->document($uid)->set([
   "availability" => $availability,
   "professional_summary" => trim((string)$body["professional_summary"]),
 
-  // consistent field names
   "portfolio" => $body["portfolio"] ?? null,
   "linkedin" => $linkedin,
   "phone" => $phone,
@@ -104,10 +130,8 @@ $firestore->collection("professionals")->document($uid)->set([
   "rejected" => false,
 
   "updated_at" => $now,
-  // don't overwrite created_at if exists
 ], ["merge" => true]);
 
-// Update users/{uid}
 $firestore->collection("users")->document($uid)->set([
   "professional_status" => "pending",
   "updated_at" => $now

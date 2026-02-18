@@ -12,7 +12,20 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Loader2, User as UserIcon, FileText, History, Settings, CheckCircle, Clock, XCircle, AlertCircle } from "lucide-react";
+import {
+  Loader2,
+  User as UserIcon,
+  FileText,
+  History,
+  CheckCircle,
+  Clock,
+  XCircle,
+  AlertCircle,
+  ExternalLink,
+  Users,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { auth } from "@/lib/firebase";
 
@@ -55,29 +68,31 @@ type MatchRow = {
 };
 
 function getStatusBadge(status: string) {
-  switch (status) {
+  const s = (status || "").toLowerCase();
+  switch (s) {
     case "approved":
       return (
-        <Badge className="bg-green-500/10 text-green-500 border-green-500/20">
+        <Badge className="bg-green-500/10 text-green-600 border-green-500/20">
           <CheckCircle className="w-3 h-3 mr-1" /> Approved
         </Badge>
       );
     case "pending":
+    case "pending_review":
       return (
-        <Badge className="bg-yellow-500/10 text-yellow-500 border-yellow-500/20">
+        <Badge className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20">
           <Clock className="w-3 h-3 mr-1" /> Pending
         </Badge>
       );
     case "rejected":
       return (
-        <Badge className="bg-red-500/10 text-red-500 border-red-500/20">
+        <Badge className="bg-red-500/10 text-red-600 border-red-500/20">
           <XCircle className="w-3 h-3 mr-1" /> Rejected
         </Badge>
       );
     default:
       return (
-        <Badge variant="outline">
-          <AlertCircle className="w-3 h-3 mr-1" /> {status}
+        <Badge variant="outline" className="text-muted-foreground">
+          <AlertCircle className="w-3 h-3 mr-1" /> {status || "not_applied"}
         </Badge>
       );
   }
@@ -90,12 +105,23 @@ function prettyLabel(v: string) {
   return v.replace(/_/g, " ").replace("aiml", "AI/ML").replace("b2b", "B2B").replace("hr", "HR");
 }
 
+function formatRangeLabel(v: string) {
+  return v.replace(/_/g, "-").replace("plus", "+");
+}
+
+function initials(name?: string | null) {
+  const raw = (name || "").trim();
+  if (!raw) return "PR";
+  const parts = raw.split(/\s+/).slice(0, 2);
+  const ini = parts.map((p) => p[0]?.toUpperCase()).join("");
+  return ini || "PR";
+}
+
 export default function ProfessionalDashboard() {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
-
   const [professional, setProfessional] = useState<ProfessionalDoc | null>(null);
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [saving, setSaving] = useState(false);
@@ -224,15 +250,25 @@ export default function ProfessionalDashboard() {
 
   const toggleAvailability = async (checked: boolean) => {
     setFormData((p) => ({ ...p, is_available: checked }));
-    // optional: auto-save availability immediately
-    // (kept simple: user hits save)
+    // optional: auto-save availability immediately (kept as manual save)
   };
 
   const defaultTab = useMemo(() => {
-    // If they’re not approved, focus “Application / Status”
     if (!isApproved) return "application";
     return "profile";
   }, [isApproved]);
+
+  const profileStrength = useMemo(() => {
+    const checks = [
+      Boolean(professional?.professional_summary?.trim()),
+      Boolean(professional?.hourly_rate_range),
+      Boolean(professional?.availability),
+      Boolean(professional?.linkedin),
+      Boolean(professional?.phone),
+    ];
+    const done = checks.filter(Boolean).length;
+    return { done, total: checks.length, pct: Math.round((done / checks.length) * 100) };
+  }, [professional]);
 
   if (authLoading || loading) {
     return (
@@ -248,59 +284,103 @@ export default function ProfessionalDashboard() {
 
       <main className="container mx-auto px-4 pt-28 pb-10">
         {/* Top status card */}
-        <Card className="rounded-2xl mb-6">
-          <CardHeader className="flex flex-row items-start justify-between gap-4">
-            <div className="space-y-1">
-              <CardTitle className="text-xl">Professional Dashboard</CardTitle>
-              <CardDescription>
-                {professional
-                  ? "Manage your public profile, availability, and your matched teams."
-                  : "You don’t have a professional profile yet. Apply to join the network."}
-              </CardDescription>
-            </div>
-            <div className="shrink-0">{getStatusBadge(String(professional?.status ?? "not_applied"))}</div>
-          </CardHeader>
+        <div className="rounded-3xl p-[1px] bg-gradient-to-r from-border/40 via-border to-border/40 mb-6">
+          <Card className="rounded-3xl shadow-sm">
+            <CardHeader className="flex flex-row items-start justify-between gap-4">
+              <div className="space-y-1">
+                <CardTitle className="text-xl">Professional Dashboard</CardTitle>
+                <CardDescription>
+                  {professional
+                    ? "Manage your public profile, availability, and your matched teams."
+                    : "You don’t have a professional profile yet. Apply to join the network."}
+                </CardDescription>
+              </div>
+              <div className="shrink-0">{getStatusBadge(String(professional?.status ?? "not_applied"))}</div>
+            </CardHeader>
 
-          <CardContent className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div className="text-sm text-muted-foreground">
-              {professional ? (
-                <>
-                  <div>
-                    <span className="font-medium text-foreground">Public name:</span>{" "}
-                    {professional.name || user?.displayName || "—"}
-                  </div>
-                  <div>
-                    <span className="font-medium text-foreground">Primary role:</span>{" "}
-                    {professional.primary_role ? prettyLabel(professional.primary_role) : "—"}
-                  </div>
-                </>
-              ) : (
-                <div>No application found for your account.</div>
-              )}
-            </div>
+            <CardContent className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div className="text-sm text-muted-foreground">
+                {professional ? (
+                  <>
+                    <div>
+                      <span className="font-medium text-foreground">Public name:</span>{" "}
+                      {professional.name || user?.displayName || "—"}
+                    </div>
+                    <div>
+                      <span className="font-medium text-foreground">Primary role:</span>{" "}
+                      {professional.primary_role ? prettyLabel(professional.primary_role) : "—"}
+                    </div>
+                  </>
+                ) : (
+                  <div>No application found for your account.</div>
+                )}
+              </div>
 
-            {/* ✅ Apply button only if NOT approved */}
-            {!isApproved ? (
-              <Button onClick={() => navigate("/professional-apply")} variant="premium">
-                Apply Now
-              </Button>
-            ) : null}
-          </CardContent>
-        </Card>
+              {!isApproved ? (
+                <Button onClick={() => navigate("/professional-apply")} variant="premium" className="rounded-xl">
+                  Apply Now
+                </Button>
+              ) : null}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Stats row */}
+        <div className="grid gap-4 md:grid-cols-3 mb-6">
+          <Card className="rounded-2xl">
+            <CardContent className="pt-6 flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">Status</div>
+                <div className="font-semibold">{(professional?.status || "not_applied").toString()}</div>
+              </div>
+              <div className="shrink-0">{getStatusBadge(String(professional?.status ?? "not_applied"))}</div>
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-2xl">
+            <CardContent className="pt-6 flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">Availability</div>
+                <div className="font-semibold">{formData.is_available ? "Available" : "Not available"}</div>
+              </div>
+              <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                <ShieldCheck className="w-4 h-4" />
+                Matches use this
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-2xl">
+            <CardContent className="pt-6 flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">Matches</div>
+                <div className="font-semibold">{matches.length}</div>
+              </div>
+              <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                <Users className="w-4 h-4" />
+                Team placements
+              </div>
+            </CardContent>
+          </Card>
+        </div>
 
         <Tabs defaultValue={defaultTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-3 lg:w-auto lg:inline-grid">
-            <TabsTrigger value="profile" disabled={!professional || !isApproved}>
+          <TabsList className="grid w-full grid-cols-3 gap-2 rounded-2xl p-2 h-auto lg:w-auto lg:inline-grid">
+            <TabsTrigger
+              value="profile"
+              disabled={!professional || !isApproved}
+              className="py-2 text-xs md:text-sm"
+            >
               <UserIcon className="w-4 h-4 mr-2" />
               Public Profile
             </TabsTrigger>
 
-            <TabsTrigger value="matches" disabled={!isApproved}>
+            <TabsTrigger value="matches" disabled={!isApproved} className="py-2 text-xs md:text-sm">
               <History className="w-4 h-4 mr-2" />
               Matches
             </TabsTrigger>
 
-            <TabsTrigger value="application">
+            <TabsTrigger value="application" className="py-2 text-xs md:text-sm">
               <FileText className="w-4 h-4 mr-2" />
               Application / Status
             </TabsTrigger>
@@ -312,12 +392,13 @@ export default function ProfessionalDashboard() {
               <Card className="rounded-2xl">
                 <CardHeader>
                   <CardTitle>Profile not available</CardTitle>
-                  <CardDescription>
-                    Your profile becomes public after your application is approved.
-                  </CardDescription>
+                  <CardDescription>Your profile becomes public after your application is approved.</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <Button onClick={() => navigate("/professional-apply")} variant="premium">
+                <CardContent className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    Tip: A strong summary + accurate links improves matching quality.
+                  </p>
+                  <Button onClick={() => navigate("/professional-apply")} variant="premium" className="rounded-xl">
                     Apply Now
                   </Button>
                 </CardContent>
@@ -327,36 +408,81 @@ export default function ProfessionalDashboard() {
                 {/* Public preview */}
                 <Card className="rounded-2xl">
                   <CardHeader>
-                    <CardTitle>How you appear to the public</CardTitle>
+                    <CardTitle className="flex items-center gap-2">
+                      <Sparkles className="w-5 h-5 text-primary" />
+                      How you appear to the public
+                    </CardTitle>
                     <CardDescription>This is what entrepreneurs will see.</CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-3 text-sm">
-                    <div>
-                      <div className="text-xs text-muted-foreground">Name</div>
-                      <div className="font-medium">{professional.name || "—"}</div>
-                    </div>
 
-                    <div>
-                      <div className="text-xs text-muted-foreground">Primary Role</div>
-                      <div className="font-medium">
-                        {professional.primary_role ? prettyLabel(professional.primary_role) : "—"}
+                  <CardContent className="space-y-4">
+                    <div className="flex items-start gap-4">
+                      <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center font-semibold">
+                        {initials(professional.name || user?.displayName || null)}
+                      </div>
+
+                      <div className="min-w-0">
+                        <div className="font-semibold truncate">{professional.name || "—"}</div>
+                        <div className="text-sm text-muted-foreground truncate">
+                          {professional.primary_role ? prettyLabel(professional.primary_role) : "—"}
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 pt-2">
+                          {professional.availability ? (
+                            <Badge variant="outline">{prettyLabel(professional.availability)}</Badge>
+                          ) : null}
+                          {professional.hourly_rate_range ? (
+                            <Badge variant="outline">{formatRangeLabel(professional.hourly_rate_range)}</Badge>
+                          ) : null}
+                          {professional.is_available ? (
+                            <Badge className="bg-green-500/10 text-green-600 border-green-500/20">
+                              Available
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-muted-foreground">
+                              Not available
+                            </Badge>
+                          )}
+                        </div>
                       </div>
                     </div>
 
-                    <div>
-                      <div className="text-xs text-muted-foreground">Summary</div>
-                      <div className="text-muted-foreground whitespace-pre-wrap">
+                    <div className="rounded-xl border p-4 bg-muted/10">
+                      <div className="text-xs text-muted-foreground mb-1">Summary</div>
+                      <div className="text-sm text-muted-foreground whitespace-pre-wrap">
                         {professional.professional_summary || "—"}
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap gap-2 pt-2">
-                      {professional.availability ? (
-                        <Badge variant="outline">{prettyLabel(professional.availability)}</Badge>
+                    <div className="flex flex-wrap gap-2">
+                      {professional.linkedin ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-xl"
+                          onClick={() => window.open(String(professional.linkedin), "_blank")}
+                        >
+                          LinkedIn <ExternalLink className="w-4 h-4 ml-2" />
+                        </Button>
                       ) : null}
-                      {professional.hourly_rate_range ? (
-                        <Badge variant="outline">{professional.hourly_rate_range.replace(/_/g, "-").replace("plus", "+")}</Badge>
+
+                      {professional.portfolio ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-xl"
+                          onClick={() => window.open(String(professional.portfolio), "_blank")}
+                        >
+                          Portfolio <ExternalLink className="w-4 h-4 ml-2" />
+                        </Button>
                       ) : null}
+                    </div>
+
+                    <div className="text-xs text-muted-foreground">
+                      Profile strength: <span className="font-medium text-foreground">{profileStrength.pct}%</span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
+                      <div className="h-2 rounded-full bg-primary" style={{ width: `${profileStrength.pct}%` }} />
                     </div>
                   </CardContent>
                 </Card>
@@ -371,13 +497,22 @@ export default function ProfessionalDashboard() {
                   <CardContent>
                     <form onSubmit={onSaveProfile} className="space-y-4">
                       <div className="space-y-2">
-                        <Label>Professional Summary</Label>
+                        <div className="flex items-center justify-between">
+                          <Label>Professional Summary</Label>
+                          <span className="text-xs text-muted-foreground">
+                            {formData.professional_summary.trim().length}/300
+                          </span>
+                        </div>
                         <Textarea
                           value={formData.professional_summary}
                           onChange={(e) => setFormData((p) => ({ ...p, professional_summary: e.target.value }))}
-                          rows={5}
-                          placeholder="Describe your expertise and what you can offer."
+                          rows={6}
+                          maxLength={300}
+                          placeholder="Be specific: your skills, tools, and what you deliver."
                         />
+                        <p className="text-xs text-muted-foreground">
+                          Tip: Mention your stack + results (ex: “reduced load time by 40%”).
+                        </p>
                       </div>
 
                       <div className="grid md:grid-cols-2 gap-4">
@@ -393,7 +528,7 @@ export default function ProfessionalDashboard() {
                             <SelectContent>
                               {RATE_OPTIONS.map((r) => (
                                 <SelectItem key={r} value={r}>
-                                  {r.replace(/_/g, "-").replace("plus", "+")}
+                                  {formatRangeLabel(r)}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -427,6 +562,7 @@ export default function ProfessionalDashboard() {
                           onChange={(e) => setFormData((p) => ({ ...p, linkedin: e.target.value }))}
                           placeholder="https://linkedin.com/in/..."
                         />
+                        <p className="text-xs text-muted-foreground">Must include https://</p>
                       </div>
 
                       <div className="grid md:grid-cols-2 gap-4">
@@ -449,15 +585,17 @@ export default function ProfessionalDashboard() {
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between p-4 border rounded-xl">
-                        <div>
+                      <div className="flex items-center justify-between p-4 border rounded-xl bg-muted/10">
+                        <div className="space-y-1">
                           <Label className="text-base">Available for matches</Label>
-                          <p className="text-sm text-muted-foreground">Toggle whether you can be matched to teams.</p>
+                          <p className="text-sm text-muted-foreground">
+                            If off, you won’t be suggested for new teams.
+                          </p>
                         </div>
                         <Switch checked={formData.is_available} onCheckedChange={toggleAvailability} />
                       </div>
 
-                      <Button type="submit" disabled={saving} variant="premium" className="w-full">
+                      <Button type="submit" disabled={saving} variant="premium" className="w-full rounded-xl">
                         {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                         Save Changes
                       </Button>
@@ -478,27 +616,54 @@ export default function ProfessionalDashboard() {
 
               <CardContent>
                 {matches.length === 0 ? (
-                  <div className="text-sm text-muted-foreground">
-                    No matches yet. Once an entrepreneur saves a team that includes you, it will show here.
+                  <div className="space-y-3">
+                    <div className="text-sm text-muted-foreground">
+                      No matches yet. Once an entrepreneur saves a team that includes you, it will show here.
+                    </div>
+                    <div className="rounded-xl border p-4 bg-muted/10 text-sm text-muted-foreground">
+                      Tip: Turn on <span className="font-medium text-foreground">Availability</span> and keep your
+                      summary strong to increase matching.
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {matches.map((m) => (
-                      <div key={m.id} className="border rounded-xl p-4">
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
-                            <div className="font-medium">Project: {m.project_id || m.id}</div>
-                            <div className="text-sm text-muted-foreground">
-                              Updated: {m.updated_at ? new Date(m.updated_at).toLocaleString() : "—"}
+                    {matches.map((m) => {
+                      const teamCount = m.team?.length ?? 0;
+                      const updated = m.updated_at ? new Date(m.updated_at).toLocaleString() : "—";
+                      const status = String(m.status || "—");
+                      return (
+                        <div key={m.id} className="border rounded-2xl p-4 hover:bg-muted/10 transition-colors">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0">
+                              <div className="font-semibold truncate">
+                                Project: {m.project_id || m.id}
+                              </div>
+                              <div className="text-sm text-muted-foreground">Updated: {updated}</div>
+                              <div className="text-sm text-muted-foreground">
+                                Status: <span className="text-foreground">{status}</span>{" "}
+                                {m.locked ? <span className="text-muted-foreground">• Locked</span> : null}
+                              </div>
                             </div>
-                            <div className="text-sm text-muted-foreground">
-                              Status: {m.status || "—"} {m.locked ? "• Locked" : ""}
+
+                            <div className="flex flex-col items-end gap-2 shrink-0">
+                              <Badge variant="outline" className="rounded-xl">
+                                <Users className="w-3 h-3 mr-1" />
+                                {teamCount} members
+                              </Badge>
+                              {m.locked ? (
+                                <Badge className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20 rounded-xl">
+                                  Locked
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-muted-foreground rounded-xl">
+                                  Open
+                                </Badge>
+                              )}
                             </div>
                           </div>
-                          <Badge variant="outline">{(m.team?.length ?? 0)} members</Badge>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </CardContent>
@@ -511,15 +676,13 @@ export default function ProfessionalDashboard() {
               <CardHeader>
                 <CardTitle>Application status</CardTitle>
                 <CardDescription>
-                  {professional
-                    ? "Track your current review status."
-                    : "You haven’t submitted an application yet."}
+                  {professional ? "Track your current review status." : "You haven’t submitted an application yet."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 {professional ? (
                   <>
-                    <div className="flex items-center justify-between border rounded-xl p-4">
+                    <div className="flex items-center justify-between border rounded-xl p-4 bg-muted/10">
                       <div>
                         <div className="text-sm text-muted-foreground">Current status</div>
                         <div className="font-medium">{professional.status || "—"}</div>
@@ -527,28 +690,52 @@ export default function ProfessionalDashboard() {
                       {getStatusBadge(String(professional.status || "pending"))}
                     </div>
 
+                    {/* Simple timeline feel */}
+                    <div className="border rounded-xl p-4">
+                      <div className="text-sm font-medium mb-2">Review flow</div>
+                      <ol className="space-y-2 text-sm text-muted-foreground">
+                        <li className="flex items-center gap-2">
+                          <CheckCircle className="w-4 h-4 text-primary" />
+                          Submitted
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <Clock className="w-4 h-4" />
+                          Under review
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <CheckCircle className="w-4 h-4" />
+                          Approved (profile becomes public)
+                        </li>
+                      </ol>
+                    </div>
+
                     {!isApproved ? (
-                      <div className="flex items-center justify-between border rounded-xl p-4">
+                      <div className="flex items-center justify-between border rounded-xl p-4 bg-muted/10">
                         <div>
                           <div className="font-medium">Want to update your application?</div>
                           <div className="text-sm text-muted-foreground">
                             You can submit your application now or update details after approval.
                           </div>
                         </div>
-                        <Button variant="premium" onClick={() => navigate("/professional-apply")}>
+                        <Button variant="premium" className="rounded-xl" onClick={() => navigate("/professional-apply")}>
                           Go to Application
                         </Button>
                       </div>
                     ) : (
-                      <div className="border rounded-xl p-4 text-sm text-muted-foreground">
+                      <div className="border rounded-xl p-4 text-sm bg-green-500/5 text-green-700">
                         You’re approved 🎉 Your public profile is active.
                       </div>
                     )}
                   </>
                 ) : (
-                  <Button variant="premium" onClick={() => navigate("/professional-apply")}>
-                    Apply Now
-                  </Button>
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      You haven’t applied yet. Submitting a complete profile improves approval speed and matching.
+                    </p>
+                    <Button variant="premium" className="rounded-xl" onClick={() => navigate("/professional-apply")}>
+                      Apply Now
+                    </Button>
+                  </div>
                 )}
               </CardContent>
             </Card>

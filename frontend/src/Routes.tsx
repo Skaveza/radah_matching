@@ -1,4 +1,6 @@
+// src/Routes.tsx
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 
 import Index from "@/pages/Index";
@@ -23,28 +25,83 @@ import ResetPassword from "@/pages/ResetPassword";
 import UpdatePassword from "@/pages/UpdatePassword";
 import NotFound from "@/pages/NotFound";
 
-const ProtectedRoute = ({
+type Role = "entrepreneur" | "professional" | "admin" | null;
+
+const RequireAuth = ({ children }: { children: JSX.Element }) => {
+  const { user, loading } = useAuth();
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  if (!user) return <Navigate to="/login" replace />;
+
+  return children;
+};
+
+const RequireRole = ({
   children,
   role,
-  requireRole = true,
 }: {
   children: JSX.Element;
   role?: "entrepreneur" | "professional" | "admin";
-  requireRole?: boolean;
 }) => {
-  const { user, loading, role: userRole } = useAuth();
+  const { user, loading, role: userRole, refreshMe } = useAuth();
 
-  if (loading) {
+  const [checkedRole, setCheckedRole] = useState(false);
+  const [resolvedRole, setResolvedRole] = useState<Role>(userRole);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const run = async () => {
+      if (loading) return;
+
+      // Not logged in
+      if (!user) {
+        if (mounted) {
+          setResolvedRole(null);
+          setCheckedRole(true);
+        }
+        return;
+      }
+
+      // Role already known in context
+      if (userRole) {
+        if (mounted) {
+          setResolvedRole(userRole);
+          setCheckedRole(true);
+        }
+        return;
+      }
+
+      // Try once to fetch role from backend (/api/me)
+      try {
+        const me = await refreshMe();
+        if (mounted) setResolvedRole((me?.role ?? null) as Role);
+      } catch {
+        // If backend fails temporarily, don't loop /choose-role infinitely.
+        // We'll treat it as missing and allow choose-role redirect below.
+        if (mounted) setResolvedRole(null);
+      } finally {
+        if (mounted) setCheckedRole(true);
+      }
+    };
+
+    run();
+    return () => {
+      mounted = false;
+    };
+  }, [user, loading, userRole, refreshMe]);
+
+  if (loading || !checkedRole) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
   }
 
   if (!user) return <Navigate to="/login" replace />;
 
-  // Only require a role when requireRole is true
-  if (requireRole && !userRole) return <Navigate to="/choose-role" replace />;
+  // If logged in but role truly missing -> choose-role
+  if (!resolvedRole) return <Navigate to="/choose-role" replace />;
 
-  // role-based lock (only if role was provided)
-  if (role && userRole !== role) return <Navigate to="/" replace />;
+  // If route requires a specific role, enforce it
+  if (role && resolvedRole !== role) return <Navigate to="/" replace />;
 
   return children;
 };
@@ -54,16 +111,16 @@ export default function AppRoutes() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Index />} />
+
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
 
-        {/* Allow logged-in users without a role to access choose-role */}
         <Route
           path="/choose-role"
           element={
-            <ProtectedRoute requireRole={false}>
+            <RequireAuth>
               <ChooseRole />
-            </ProtectedRoute>
+            </RequireAuth>
           }
         />
 
@@ -75,85 +132,93 @@ export default function AppRoutes() {
         <Route
           path="/profile"
           element={
-            <ProtectedRoute>
+            <RequireAuth>
               <Profile />
-            </ProtectedRoute>
+            </RequireAuth>
           }
         />
 
-        <Route path="/professional-apply" element={<ProfessionalApplication />} />
+        <Route
+          path="/professional-apply"
+          element={
+            <RequireRole role="professional">
+              <ProfessionalApplication />
+            </RequireRole>
+          }
+        />
 
         <Route
           path="/professional-dashboard"
           element={
-            <ProtectedRoute role="professional">
+            <RequireRole role="professional">
               <ProfessionalDashboard />
-            </ProtectedRoute>
+            </RequireRole>
           }
         />
 
         <Route
           path="/dashboard"
           element={
-            <ProtectedRoute role="entrepreneur">
+            <RequireRole role="entrepreneur">
               <Dashboard />
-            </ProtectedRoute>
+            </RequireRole>
           }
         />
 
         <Route
           path="/intake"
           element={
-            <ProtectedRoute role="entrepreneur">
+            <RequireRole role="entrepreneur">
               <Intake />
-            </ProtectedRoute>
+            </RequireRole>
           }
         />
 
         <Route
           path="/team-builder"
           element={
-            <ProtectedRoute role="entrepreneur">
+            <RequireRole role="entrepreneur">
               <TeamBuilder />
-            </ProtectedRoute>
+            </RequireRole>
           }
         />
         <Route
           path="/team-builder/:projectId"
           element={
-            <ProtectedRoute role="entrepreneur">
+            <RequireRole role="entrepreneur">
               <TeamBuilder />
-            </ProtectedRoute>
+            </RequireRole>
           }
         />
 
         <Route
           path="/team-preview"
           element={
-            <ProtectedRoute role="entrepreneur">
+            <RequireRole role="entrepreneur">
               <TeamPreview />
-            </ProtectedRoute>
+            </RequireRole>
           }
         />
         <Route
           path="/team-preview/:projectId"
           element={
-            <ProtectedRoute role="entrepreneur">
+            <RequireRole role="entrepreneur">
               <TeamPreview />
-            </ProtectedRoute>
+            </RequireRole>
           }
         />
 
         <Route
           path="/admin"
           element={
-            <ProtectedRoute role="admin">
+            <RequireRole role="admin">
               <Admin />
-            </ProtectedRoute>
+            </RequireRole>
           }
         />
 
         <Route path="/payment-success" element={<PaymentSuccess />} />
+
         <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>

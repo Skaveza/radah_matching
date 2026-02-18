@@ -11,25 +11,17 @@ class FirebaseMiddlewareV2
 
     public function __construct()
     {
-        // Option 2: Base64 credentials from Render env
         $base64 = $_ENV['FIREBASE_CREDENTIALS_BASE64'] ?? getenv('FIREBASE_CREDENTIALS_BASE64');
-
-        if (!$base64) {
-            $this->serverError("Missing FIREBASE_CREDENTIALS_BASE64");
-        }
+        if (!$base64) $this->serverError("Missing FIREBASE_CREDENTIALS_BASE64");
 
         $json = base64_decode($base64, true);
-        if (!$json) {
-            $this->serverError("Invalid FIREBASE_CREDENTIALS_BASE64 (not valid base64)");
-        }
+        if (!$json) $this->serverError("Invalid FIREBASE_CREDENTIALS_BASE64 (not valid base64)");
 
-        // Validate JSON structure quickly
         $data = json_decode($json, true);
         if (!is_array($data) || empty($data['client_email']) || empty($data['private_key'])) {
             $this->serverError("Decoded Firebase credentials JSON is invalid (missing client_email/private_key)");
         }
 
-        // Write temp credentials file (Render-safe)
         $tempFile = sys_get_temp_dir() . '/firebase_credentials_' . sha1($data['client_email']) . '.json';
         if (!file_exists($tempFile)) {
             file_put_contents($tempFile, $json);
@@ -58,7 +50,6 @@ class FirebaseMiddlewareV2
 
         $uid = $verifiedToken->claims()->get('sub');
 
-        // Firebase user info (optional)
         $email = null;
         $name  = null;
         try {
@@ -70,10 +61,11 @@ class FirebaseMiddlewareV2
         }
 
         $firestore = new FirestoreService();
+
         $userDoc = [];
         $role = null;
 
-        // Fetch Firestore profile if exists
+        // Fetch Firestore profile if exists (but DO NOT swallow silently)
         try {
             $snap = $firestore->collection("users")->document($uid)->snapshot();
             if ($snap && $snap->exists()) {
@@ -81,11 +73,14 @@ class FirebaseMiddlewareV2
                 $role = $userDoc["role"] ?? null;
             }
         } catch (\Throwable $e) {
-            $userDoc = [];
-            $role = null;
+            // log actual reason for debugging on Render
+            error_log("[FirebaseMiddlewareV2] Firestore users/$uid read failed: " . $e->getMessage());
+
+            // Do not pretend role is missing when Firestore is broken
+            $this->serverError("Auth profile lookup failed (Firestore)");
         }
 
-        // Auto-admin promotion based on env allow-list (secure)
+        // Auto-admin promotion (only if NO userDoc)
         if (empty($userDoc) && $email && $this->isAdminEmail($email)) {
             $profile = [
                 "uid" => $uid,
@@ -103,7 +98,8 @@ class FirebaseMiddlewareV2
                 $userDoc = $profile;
                 $role = "admin";
             } catch (\Throwable $e) {
-                // ignore
+                error_log("[FirebaseMiddlewareV2] Auto-admin write failed: " . $e->getMessage());
+                $this->serverError("Failed to create admin profile");
             }
         }
 
@@ -112,10 +108,8 @@ class FirebaseMiddlewareV2
         }
 
         if (!empty($allowedRoles)) {
-            if (!$role) $this->forbidden("User role missing");
-            if (!in_array($role, $allowedRoles, true)) {
-                $this->forbidden("Insufficient permissions");
-            }
+            if (!$role) $this->forbidden("User role missing (no role saved in users profile)");
+            if (!in_array($role, $allowedRoles, true)) $this->forbidden("Insufficient permissions");
         }
 
         return [
