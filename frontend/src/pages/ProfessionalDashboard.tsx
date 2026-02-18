@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import Header from "@/components/landing/Header";
 import { useAuth } from "@/hooks/useAuth";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,253 +12,208 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import {
-  Loader2,
-  User as UserIcon,
-  FileText,
-  History,
-  Settings,
-  LogOut,
-  CheckCircle,
-  Clock,
-  XCircle,
-  AlertCircle,
-} from "lucide-react";
+import { Loader2, User as UserIcon, FileText, History, Settings, CheckCircle, Clock, XCircle, AlertCircle } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { auth } from "@/lib/firebase";
 
-interface Professional {
-  id: string;
-  name: string;
-  email: string;
-  role: string;
-  experience: string;
-  industry: string;
-  summary: string;
-  rate_range: string;
-  availability: string;
-  is_available: boolean;
-  linkedin: string | null;
-  portfolio: string | null;
-  phone: string | null;
-}
-
-interface Application {
-  id: string;
-  name: string;
-  email: string;
-  role: string;
-  status: string;
-  rejection_reason: string | null;
-  created_at: string;
-}
-
 type AnyRow = Record<string, any>;
 
-function normalizeApp(row: AnyRow): Application {
-  return {
-    id: String(row.id ?? row.application_id ?? row.app_id ?? ""),
-    name: String(row.name ?? ""),
-    email: String(row.email ?? ""),
-    role: String(row.role ?? row.primary_role ?? ""),
-    status: String(row.status ?? "pending"),
-    rejection_reason: row.rejection_reason ?? row.reason ?? null,
-    created_at: String(row.created_at ?? row.submitted_at ?? new Date().toISOString()),
-  };
+type ProfessionalDoc = {
+  id: string; // uid
+  name?: string | null;
+  email?: string | null;
+  region?: string | null;
+
+  primary_role?: string;
+  years_experience?: string;
+  industry_experience?: string[];
+
+  hourly_rate_range?: string;
+  availability?: string;
+  professional_summary?: string;
+
+  linkedin?: string | null;
+  portfolio?: string | null;
+  phone?: string | null;
+
+  status?: "pending" | "approved" | "rejected" | "pending_review" | string;
+  approved?: boolean;
+  rejected?: boolean;
+  is_available?: boolean;
+
+  updated_at?: string;
+};
+
+type MatchRow = {
+  id: string; // projectId
+  project_id?: string;
+  entrepreneur_id?: string;
+  team?: any[];
+  status?: string;
+  locked?: boolean;
+  updated_at?: string;
+};
+
+function getStatusBadge(status: string) {
+  switch (status) {
+    case "approved":
+      return (
+        <Badge className="bg-green-500/10 text-green-500 border-green-500/20">
+          <CheckCircle className="w-3 h-3 mr-1" /> Approved
+        </Badge>
+      );
+    case "pending":
+      return (
+        <Badge className="bg-yellow-500/10 text-yellow-500 border-yellow-500/20">
+          <Clock className="w-3 h-3 mr-1" /> Pending
+        </Badge>
+      );
+    case "rejected":
+      return (
+        <Badge className="bg-red-500/10 text-red-500 border-red-500/20">
+          <XCircle className="w-3 h-3 mr-1" /> Rejected
+        </Badge>
+      );
+    default:
+      return (
+        <Badge variant="outline">
+          <AlertCircle className="w-3 h-3 mr-1" /> {status}
+        </Badge>
+      );
+  }
 }
 
-function normalizeProfessional(row: AnyRow): Professional {
-  return {
-    id: String(row.id ?? row.professional_id ?? ""),
-    name: String(row.name ?? ""),
-    email: String(row.email ?? ""),
-    role: String(row.role ?? ""),
-    experience: String(row.experience ?? row.years_experience ?? ""),
-    industry: String(row.industry ?? ""),
-    summary: String(row.summary ?? ""),
-    rate_range: String(row.rate_range ?? ""),
-    availability: String(row.availability ?? ""),
-    is_available: Boolean(row.is_available ?? row.available ?? false),
-    linkedin: row.linkedin ?? null,
-    portfolio: row.portfolio ?? null,
-    phone: row.phone ?? null,
-  };
+const RATE_OPTIONS = ["50_75", "75_100", "100_150", "150_200", "200_plus"] as const;
+const AVAIL_OPTIONS = ["full_time", "part_time", "limited", "project_based"] as const;
+
+function prettyLabel(v: string) {
+  return v.replace(/_/g, " ").replace("aiml", "AI/ML").replace("b2b", "B2B").replace("hr", "HR");
 }
 
 export default function ProfessionalDashboard() {
-  const { user, loading: authLoading, signOut } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
-  const [professional, setProfessional] = useState<Professional | null>(null);
-  const [applications, setApplications] = useState<Application[]>([]);
+
+  const [professional, setProfessional] = useState<ProfessionalDoc | null>(null);
+  const [matches, setMatches] = useState<MatchRow[]>([]);
   const [saving, setSaving] = useState(false);
 
+  // editable form mirrors firestore keys (consistent with professionals_apply.php)
   const [formData, setFormData] = useState({
-    summary: "",
-    rate_range: "",
+    professional_summary: "",
+    hourly_rate_range: "",
     availability: "",
     linkedin: "",
     portfolio: "",
     phone: "",
+    is_available: false,
   });
 
   useEffect(() => {
-    if (!authLoading && !user) {
-      navigate("/professional-login");
-    }
-  }, [user, authLoading, navigate]);
+    if (!authLoading && !user) navigate("/login");
+  }, [authLoading, user, navigate]);
 
-  const userEmail = user?.email || "";
+  const welcomeName = user?.displayName || user?.email?.split("@")[0] || null;
+  const subText = user?.email ? `Signed in as ${user.email}` : null;
 
-  const fetchProfessionalData = async () => {
-    if (!userEmail) return;
-
+  const fetchData = async () => {
     try {
       setLoading(true);
 
       const token = await auth.currentUser?.getIdToken().catch(() => null);
+      if (!token) throw new Error("Missing auth token. Please sign in again.");
 
-      // 1) Try to find approved professional by email
-      let prof: Professional | null = null;
-      try {
-        const res = await apiFetch<any>("/api/professionals/professionals_list_approved", {
-          method: "GET",
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        });
+      // 1) my professional profile
+      const meRes = await apiFetch<any>("/api/professionals/me", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-        const list = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : Array.isArray(res?.professionals) ? res.professionals : [];
-        const found = list.find((r: AnyRow) => String(r.email || "").toLowerCase() === userEmail.toLowerCase());
-        if (found) prof = normalizeProfessional(found);
-      } catch {
-        // ignore, fallback below
-      }
+      const prof = (meRes?.professional ?? null) as AnyRow | null;
+      const exists = Boolean(meRes?.exists);
 
-      // 2) Applications: try professionals_list (assumed includes applications)
-      let apps: Application[] = [];
-      try {
-        const res = await apiFetch<any>("/api/professionals/professionals_list", {
-          method: "GET",
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        });
+      if (exists && prof) {
+        const normalized: ProfessionalDoc = {
+          id: String(prof.id ?? prof.uid ?? auth.currentUser?.uid ?? ""),
+          ...prof,
+        };
 
-        const list = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : Array.isArray(res?.applications) ? res.applications : [];
-        apps = list
-          .map((r: AnyRow) => normalizeApp(r))
-          .filter((a: Application) => (a.email || "").toLowerCase() === userEmail.toLowerCase())
-          .sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
-      } catch {
-        // Fallback: pending list only
-        try {
-          const res = await apiFetch<any>("/api/professionals/professionals_list_pending", {
-            method: "GET",
-            headers: {
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            },
-          });
+        setProfessional(normalized);
 
-          const list = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : Array.isArray(res?.applications) ? res.applications : [];
-          apps = list
-            .map((r: AnyRow) => normalizeApp(r))
-            .filter((a: Application) => (a.email || "").toLowerCase() === userEmail.toLowerCase())
-            .sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
-        } catch {
-          apps = [];
-        }
-      }
-
-      setProfessional(prof);
-      setApplications(apps);
-
-      if (prof) {
         setFormData({
-          summary: prof.summary || "",
-          rate_range: prof.rate_range || "",
-          availability: prof.availability || "",
-          linkedin: prof.linkedin || "",
-          portfolio: prof.portfolio || "",
-          phone: prof.phone || "",
+          professional_summary: String(normalized.professional_summary ?? ""),
+          hourly_rate_range: String(normalized.hourly_rate_range ?? ""),
+          availability: String(normalized.availability ?? ""),
+          linkedin: String(normalized.linkedin ?? ""),
+          portfolio: String(normalized.portfolio ?? ""),
+          phone: String(normalized.phone ?? ""),
+          is_available: Boolean(normalized.is_available ?? false),
         });
+      } else {
+        setProfessional(null);
       }
-    } catch (e) {
+
+      // 2) my matches
+      const matchRes = await apiFetch<any>("/api/professionals/matches", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const list = Array.isArray(matchRes?.matches) ? matchRes.matches : [];
+      setMatches(list);
+    } catch (e: any) {
       console.error(e);
-      toast.error("Failed to load your data");
+      toast.error(e?.message || "Failed to load dashboard");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (userEmail) fetchProfessionalData();
+    if (user?.uid) fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userEmail]);
+  }, [user?.uid]);
 
-  const handleAvailabilityToggle = async (checked: boolean) => {
-    if (!professional) return;
+  const isApproved = useMemo(() => {
+    if (!professional) return false;
+    if (professional.approved === true) return true;
+    if ((professional.status || "").toLowerCase() === "approved") return true;
+    return false;
+  }, [professional]);
 
-    try {
-      const token = await auth.currentUser?.getIdToken().catch(() => null);
-
-      await apiFetch("/api/professionals/professional_update", {
-        method: "POST",
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          id: professional.id,
-          is_available: checked ? 1 : 0,
-        }),
-      });
-
-      setProfessional({ ...professional, is_available: checked });
-      toast.success(checked ? "You are now available for matches" : "You are now unavailable for matches");
-    } catch (e: any) {
-      console.error(e);
-      toast.error(e?.message || "Failed to update availability");
-    }
-  };
-
-  const handleProfileUpdate = async (e: React.FormEvent) => {
+  const onSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!professional) return;
 
     try {
       setSaving(true);
-      const token = await auth.currentUser?.getIdToken().catch(() => null);
 
-      await apiFetch("/api/professionals/professional_update", {
+      const token = await auth.currentUser?.getIdToken(true).catch(() => null);
+      if (!token) throw new Error("Missing auth token. Please sign in again.");
+
+      const payload = {
+        professional_summary: formData.professional_summary.trim(),
+        hourly_rate_range: formData.hourly_rate_range,
+        availability: formData.availability,
+        linkedin: formData.linkedin.trim(),
+        phone: formData.phone.trim(),
+        portfolio: formData.portfolio.trim() || null,
+        is_available: Boolean(formData.is_available),
+      };
+
+      await apiFetch("/api/professionals/update", {
         method: "POST",
         headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          id: professional.id,
-          summary: formData.summary,
-          rate_range: formData.rate_range,
-          availability: formData.availability,
-          linkedin: formData.linkedin || null,
-          portfolio: formData.portfolio || null,
-          phone: formData.phone || null,
-        }),
+        body: JSON.stringify(payload),
       });
 
-      setProfessional({
-        ...professional,
-        summary: formData.summary,
-        rate_range: formData.rate_range,
-        availability: formData.availability,
-        linkedin: formData.linkedin || null,
-        portfolio: formData.portfolio || null,
-        phone: formData.phone || null,
-      });
-
-      toast.success("Profile updated successfully");
+      toast.success("Profile updated");
+      await fetchData();
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || "Failed to update profile");
@@ -266,41 +222,17 @@ export default function ProfessionalDashboard() {
     }
   };
 
-  const handleSignOut = async () => {
-    await signOut();
-    navigate("/professional-login");
+  const toggleAvailability = async (checked: boolean) => {
+    setFormData((p) => ({ ...p, is_available: checked }));
+    // optional: auto-save availability immediately
+    // (kept simple: user hits save)
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "approved":
-        return (
-          <Badge className="bg-green-500/10 text-green-500 border-green-500/20">
-            <CheckCircle className="w-3 h-3 mr-1" /> Approved
-          </Badge>
-        );
-      case "pending":
-        return (
-          <Badge className="bg-yellow-500/10 text-yellow-500 border-yellow-500/20">
-            <Clock className="w-3 h-3 mr-1" /> Pending
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge className="bg-red-500/10 text-red-500 border-red-500/20">
-            <XCircle className="w-3 h-3 mr-1" /> Rejected
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="outline">
-            <AlertCircle className="w-3 h-3 mr-1" /> {status}
-          </Badge>
-        );
-    }
-  };
-
-  const defaultTab = useMemo(() => (professional ? "profile" : "applications"), [professional]);
+  const defaultTab = useMemo(() => {
+    // If they’re not approved, focus “Application / Status”
+    if (!isApproved) return "application";
+    return "profile";
+  }, [isApproved]);
 
   if (authLoading || loading) {
     return (
@@ -312,242 +244,316 @@ export default function ProfessionalDashboard() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-foreground">Professional Dashboard</h1>
-            <p className="text-sm text-muted-foreground">{userEmail}</p>
-          </div>
-          <Button variant="outline" onClick={handleSignOut}>
-            <LogOut className="w-4 h-4 mr-2" />
-            Sign Out
-          </Button>
-        </div>
-      </header>
+      <Header mode="professional" welcomeName={welcomeName} subText={subText} showProfileButton />
 
-      <main className="container mx-auto px-4 py-8">
-        {!professional && applications.length === 0 ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>No Profile Found</CardTitle>
+      <main className="container mx-auto px-4 pt-28 pb-10">
+        {/* Top status card */}
+        <Card className="rounded-2xl mb-6">
+          <CardHeader className="flex flex-row items-start justify-between gap-4">
+            <div className="space-y-1">
+              <CardTitle className="text-xl">Professional Dashboard</CardTitle>
               <CardDescription>
-                You don’t have a professional profile yet. Apply to become a Radah professional.
+                {professional
+                  ? "Manage your public profile, availability, and your matched teams."
+                  : "You don’t have a professional profile yet. Apply to join the network."}
               </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button onClick={() => navigate("/professional-apply")}>Apply Now</Button>
-            </CardContent>
-          </Card>
-        ) : (
-          <Tabs defaultValue={defaultTab} className="space-y-6">
-            <TabsList className="grid w-full grid-cols-4 lg:w-auto lg:inline-grid">
-              <TabsTrigger value="profile" disabled={!professional}>
-                <UserIcon className="w-4 h-4 mr-2" />
-                Profile
-              </TabsTrigger>
-              <TabsTrigger value="applications">
-                <FileText className="w-4 h-4 mr-2" />
-                Applications
-              </TabsTrigger>
-              <TabsTrigger value="matches" disabled>
-                <History className="w-4 h-4 mr-2" />
-                Matches
-              </TabsTrigger>
-              <TabsTrigger value="settings" disabled={!professional}>
-                <Settings className="w-4 h-4 mr-2" />
-                Settings
-              </TabsTrigger>
-            </TabsList>
+            </div>
+            <div className="shrink-0">{getStatusBadge(String(professional?.status ?? "not_applied"))}</div>
+          </CardHeader>
 
-            <TabsContent value="profile">
-              {professional && (
-                <div className="grid gap-6 md:grid-cols-2">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Profile Information</CardTitle>
-                      <CardDescription>Update your professional details</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <form onSubmit={handleProfileUpdate} className="space-y-4">
-                        <div className="space-y-2">
-                          <Label>Name</Label>
-                          <Input value={professional.name} disabled className="bg-muted" />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Email</Label>
-                          <Input value={professional.email} disabled className="bg-muted" />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Role</Label>
-                          <Input value={professional.role} disabled className="bg-muted" />
-                        </div>
+          <CardContent className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="text-sm text-muted-foreground">
+              {professional ? (
+                <>
+                  <div>
+                    <span className="font-medium text-foreground">Public name:</span>{" "}
+                    {professional.name || user?.displayName || "—"}
+                  </div>
+                  <div>
+                    <span className="font-medium text-foreground">Primary role:</span>{" "}
+                    {professional.primary_role ? prettyLabel(professional.primary_role) : "—"}
+                  </div>
+                </>
+              ) : (
+                <div>No application found for your account.</div>
+              )}
+            </div>
 
-                        <div className="space-y-2">
-                          <Label htmlFor="summary">Professional Summary</Label>
-                          <Textarea
-                            id="summary"
-                            value={formData.summary}
-                            onChange={(e) => setFormData({ ...formData, summary: e.target.value })}
-                            rows={4}
-                          />
-                        </div>
+            {/* ✅ Apply button only if NOT approved */}
+            {!isApproved ? (
+              <Button onClick={() => navigate("/professional-apply")} variant="premium">
+                Apply Now
+              </Button>
+            ) : null}
+          </CardContent>
+        </Card>
 
+        <Tabs defaultValue={defaultTab} className="space-y-6">
+          <TabsList className="grid w-full grid-cols-3 lg:w-auto lg:inline-grid">
+            <TabsTrigger value="profile" disabled={!professional || !isApproved}>
+              <UserIcon className="w-4 h-4 mr-2" />
+              Public Profile
+            </TabsTrigger>
+
+            <TabsTrigger value="matches" disabled={!isApproved}>
+              <History className="w-4 h-4 mr-2" />
+              Matches
+            </TabsTrigger>
+
+            <TabsTrigger value="application">
+              <FileText className="w-4 h-4 mr-2" />
+              Application / Status
+            </TabsTrigger>
+          </TabsList>
+
+          {/* Profile */}
+          <TabsContent value="profile">
+            {!professional || !isApproved ? (
+              <Card className="rounded-2xl">
+                <CardHeader>
+                  <CardTitle>Profile not available</CardTitle>
+                  <CardDescription>
+                    Your profile becomes public after your application is approved.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button onClick={() => navigate("/professional-apply")} variant="premium">
+                    Apply Now
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-6 md:grid-cols-2">
+                {/* Public preview */}
+                <Card className="rounded-2xl">
+                  <CardHeader>
+                    <CardTitle>How you appear to the public</CardTitle>
+                    <CardDescription>This is what entrepreneurs will see.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3 text-sm">
+                    <div>
+                      <div className="text-xs text-muted-foreground">Name</div>
+                      <div className="font-medium">{professional.name || "—"}</div>
+                    </div>
+
+                    <div>
+                      <div className="text-xs text-muted-foreground">Primary Role</div>
+                      <div className="font-medium">
+                        {professional.primary_role ? prettyLabel(professional.primary_role) : "—"}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-xs text-muted-foreground">Summary</div>
+                      <div className="text-muted-foreground whitespace-pre-wrap">
+                        {professional.professional_summary || "—"}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      {professional.availability ? (
+                        <Badge variant="outline">{prettyLabel(professional.availability)}</Badge>
+                      ) : null}
+                      {professional.hourly_rate_range ? (
+                        <Badge variant="outline">{professional.hourly_rate_range.replace(/_/g, "-").replace("plus", "+")}</Badge>
+                      ) : null}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Editable form */}
+                <Card className="rounded-2xl">
+                  <CardHeader>
+                    <CardTitle>Edit your profile</CardTitle>
+                    <CardDescription>Update the information you provided in your application.</CardDescription>
+                  </CardHeader>
+
+                  <CardContent>
+                    <form onSubmit={onSaveProfile} className="space-y-4">
+                      <div className="space-y-2">
+                        <Label>Professional Summary</Label>
+                        <Textarea
+                          value={formData.professional_summary}
+                          onChange={(e) => setFormData((p) => ({ ...p, professional_summary: e.target.value }))}
+                          rows={5}
+                          placeholder="Describe your expertise and what you can offer."
+                        />
+                      </div>
+
+                      <div className="grid md:grid-cols-2 gap-4">
                         <div className="space-y-2">
-                          <Label htmlFor="rate_range">Rate Range</Label>
+                          <Label>Hourly Rate Range</Label>
                           <Select
-                            value={formData.rate_range}
-                            onValueChange={(value) => setFormData({ ...formData, rate_range: value })}
+                            value={formData.hourly_rate_range}
+                            onValueChange={(v) => setFormData((p) => ({ ...p, hourly_rate_range: v }))}
                           >
                             <SelectTrigger>
                               <SelectValue placeholder="Select rate range" />
                             </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="$50-75/hr">$50-75/hr</SelectItem>
-                              <SelectItem value="$75-100/hr">$75-100/hr</SelectItem>
-                              <SelectItem value="$100-150/hr">$100-150/hr</SelectItem>
-                              <SelectItem value="$150-200/hr">$150-200/hr</SelectItem>
-                              <SelectItem value="$200+/hr">$200+/hr</SelectItem>
+                              {RATE_OPTIONS.map((r) => (
+                                <SelectItem key={r} value={r}>
+                                  {r.replace(/_/g, "-").replace("plus", "+")}
+                                </SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
                         </div>
 
-                        <Button type="submit" disabled={saving}>
-                          {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                          Save Changes
-                        </Button>
-                      </form>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Contact & Links</CardTitle>
-                      <CardDescription>Your public contact information</CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="phone">Phone Number</Label>
-                        <Input
-                          id="phone"
-                          value={formData.phone}
-                          onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                          placeholder="+1 (555) 123-4567"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="linkedin">LinkedIn URL</Label>
-                        <Input
-                          id="linkedin"
-                          value={formData.linkedin}
-                          onChange={(e) => setFormData({ ...formData, linkedin: e.target.value })}
-                          placeholder="https://linkedin.com/in/yourprofile"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="portfolio">Portfolio URL</Label>
-                        <Input
-                          id="portfolio"
-                          value={formData.portfolio}
-                          onChange={(e) => setFormData({ ...formData, portfolio: e.target.value })}
-                          placeholder="https://yourportfolio.com"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="availability">Availability</Label>
-                        <Select
-                          value={formData.availability}
-                          onValueChange={(value) => setFormData({ ...formData, availability: value })}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select availability" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Full-time">Full-time</SelectItem>
-                            <SelectItem value="Part-time">Part-time</SelectItem>
-                            <SelectItem value="10-20 hrs/week">10-20 hrs/week</SelectItem>
-                            <SelectItem value="20-30 hrs/week">20-30 hrs/week</SelectItem>
-                            <SelectItem value="Flexible">Flexible</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-              )}
-            </TabsContent>
-
-            <TabsContent value="applications">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Your Applications</CardTitle>
-                  <CardDescription>Track the status of your professional applications</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {applications.length === 0 ? (
-                    <div className="text-center py-8 text-muted-foreground">
-                      <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                      <p>No applications found</p>
-                      <Button variant="outline" className="mt-4" onClick={() => navigate("/professional-apply")}>
-                        Submit Application
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {applications.map((app) => (
-                        <div key={app.id} className="flex items-center justify-between p-4 border rounded-lg">
-                          <div>
-                            <p className="font-medium">{app.role}</p>
-                            <p className="text-sm text-muted-foreground">
-                              Submitted {new Date(app.created_at).toLocaleDateString()}
-                            </p>
-                            {app.rejection_reason && (
-                              <p className="text-sm text-red-500 mt-1">Reason: {app.rejection_reason}</p>
-                            )}
-                          </div>
-                          {getStatusBadge(app.status)}
+                        <div className="space-y-2">
+                          <Label>Availability</Label>
+                          <Select
+                            value={formData.availability}
+                            onValueChange={(v) => setFormData((p) => ({ ...p, availability: v }))}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select availability" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {AVAIL_OPTIONS.map((a) => (
+                                <SelectItem key={a} value={a}>
+                                  {prettyLabel(a)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="matches">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Match History</CardTitle>
-                  <CardDescription>Not wired yet (no PHP endpoint provided)</CardDescription>
-                </CardHeader>
-                <CardContent className="text-sm text-muted-foreground">
-                  Once you add an endpoint like <code>/api/professionals/matches</code>, we’ll plug it in here.
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="settings">
-              {professional && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Availability Settings</CardTitle>
-                    <CardDescription>Control your matching preferences</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-6">
-                    <div className="flex items-center justify-between p-4 border rounded-lg">
-                      <div>
-                        <Label className="text-base">Available for Matches</Label>
-                        <p className="text-sm text-muted-foreground">
-                          When enabled, you can be matched with new projects
-                        </p>
                       </div>
-                      <Switch checked={professional.is_available} onCheckedChange={handleAvailabilityToggle} />
-                    </div>
+
+                      <div className="space-y-2">
+                        <Label>LinkedIn</Label>
+                        <Input
+                          value={formData.linkedin}
+                          onChange={(e) => setFormData((p) => ({ ...p, linkedin: e.target.value }))}
+                          placeholder="https://linkedin.com/in/..."
+                        />
+                      </div>
+
+                      <div className="grid md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label>Phone</Label>
+                          <Input
+                            value={formData.phone}
+                            onChange={(e) => setFormData((p) => ({ ...p, phone: e.target.value }))}
+                            placeholder="+250..."
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Portfolio (optional)</Label>
+                          <Input
+                            value={formData.portfolio}
+                            onChange={(e) => setFormData((p) => ({ ...p, portfolio: e.target.value }))}
+                            placeholder="https://yourportfolio.com"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between p-4 border rounded-xl">
+                        <div>
+                          <Label className="text-base">Available for matches</Label>
+                          <p className="text-sm text-muted-foreground">Toggle whether you can be matched to teams.</p>
+                        </div>
+                        <Switch checked={formData.is_available} onCheckedChange={toggleAvailability} />
+                      </div>
+
+                      <Button type="submit" disabled={saving} variant="premium" className="w-full">
+                        {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                        Save Changes
+                      </Button>
+                    </form>
                   </CardContent>
                 </Card>
-              )}
-            </TabsContent>
-          </Tabs>
-        )}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* Matches */}
+          <TabsContent value="matches">
+            <Card className="rounded-2xl">
+              <CardHeader>
+                <CardTitle>Your matched teams</CardTitle>
+                <CardDescription>Teams where you were included after a team was saved.</CardDescription>
+              </CardHeader>
+
+              <CardContent>
+                {matches.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">
+                    No matches yet. Once an entrepreneur saves a team that includes you, it will show here.
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {matches.map((m) => (
+                      <div key={m.id} className="border rounded-xl p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="font-medium">Project: {m.project_id || m.id}</div>
+                            <div className="text-sm text-muted-foreground">
+                              Updated: {m.updated_at ? new Date(m.updated_at).toLocaleString() : "—"}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              Status: {m.status || "—"} {m.locked ? "• Locked" : ""}
+                            </div>
+                          </div>
+                          <Badge variant="outline">{(m.team?.length ?? 0)} members</Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Application / Status */}
+          <TabsContent value="application">
+            <Card className="rounded-2xl">
+              <CardHeader>
+                <CardTitle>Application status</CardTitle>
+                <CardDescription>
+                  {professional
+                    ? "Track your current review status."
+                    : "You haven’t submitted an application yet."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {professional ? (
+                  <>
+                    <div className="flex items-center justify-between border rounded-xl p-4">
+                      <div>
+                        <div className="text-sm text-muted-foreground">Current status</div>
+                        <div className="font-medium">{professional.status || "—"}</div>
+                      </div>
+                      {getStatusBadge(String(professional.status || "pending"))}
+                    </div>
+
+                    {!isApproved ? (
+                      <div className="flex items-center justify-between border rounded-xl p-4">
+                        <div>
+                          <div className="font-medium">Want to update your application?</div>
+                          <div className="text-sm text-muted-foreground">
+                            You can submit your application now or update details after approval.
+                          </div>
+                        </div>
+                        <Button variant="premium" onClick={() => navigate("/professional-apply")}>
+                          Go to Application
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="border rounded-xl p-4 text-sm text-muted-foreground">
+                        You’re approved 🎉 Your public profile is active.
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <Button variant="premium" onClick={() => navigate("/professional-apply")}>
+                    Apply Now
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       </main>
     </div>
   );

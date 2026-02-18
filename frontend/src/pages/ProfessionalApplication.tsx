@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Header from "@/components/landing/Header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -84,7 +84,6 @@ const defaultState: FormState = {
 };
 
 function prettyLabel(v: string) {
-  // no replaceAll -> supports older TS lib targets
   return v
     .replace(/_/g, " ")
     .replace("aiml", "AI/ML")
@@ -103,10 +102,71 @@ function isValidUrl(s: string) {
 
 export default function ProfessionalApplication() {
   const navigate = useNavigate();
-  const { role } = useAuth();
+  const { user, loading, role } = useAuth();
 
   const [formData, setFormData] = useState<FormState>(defaultState);
   const [submitting, setSubmitting] = useState(false);
+  const [prefilling, setPrefilling] = useState(true);
+
+  const welcomeName = user?.displayName || user?.email?.split("@")[0] || null;
+  const subText = user?.email ? `Signed in as ${user.email}` : null;
+
+  const onChange = (key: keyof FormState, value: any) => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
+  };
+
+  // Prefill from /api/professionals/me if exists
+  useEffect(() => {
+    if (loading) return;
+
+    (async () => {
+      try {
+        setPrefilling(true);
+
+        // if not logged in, allow view but block submission
+        const u = auth.currentUser;
+        if (!u) return;
+
+        const token = await u.getIdToken();
+        const res = await apiFetch<any>("/api/professionals/me", {
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        const prof = res?.professional ?? null;
+        const exists = Boolean(res?.exists);
+
+        if (exists && prof) {
+          const status = String(prof.status ?? "").toLowerCase();
+          const approved = prof.approved === true || status === "approved";
+
+          // already approved => go to dashboard
+          if (approved) {
+            navigate("/professional-dashboard", { replace: true });
+            return;
+          }
+
+          // Prefill fields if pending/rejected
+          setFormData((p) => ({
+            ...p,
+            primary_role: prof.primary_role ?? p.primary_role,
+            years_experience: prof.years_experience ?? p.years_experience,
+            industry: Array.isArray(prof.industry_experience) ? (prof.industry_experience[0] ?? p.industry) : p.industry,
+            professional_summary: prof.professional_summary ?? p.professional_summary,
+            hourly_rate_range: prof.hourly_rate_range ?? p.hourly_rate_range,
+            availability: prof.availability ?? p.availability,
+            linkedin: prof.linkedin ?? p.linkedin,
+            portfolio: prof.portfolio ?? p.portfolio,
+            phone: prof.phone ?? p.phone,
+          }));
+        }
+      } catch {
+        // ignore: if endpoint fails, user can still fill manually
+      } finally {
+        setPrefilling(false);
+      }
+    })();
+  }, [loading, navigate]);
 
   const sanity = useMemo(() => {
     const errors: string[] = [];
@@ -127,16 +187,11 @@ export default function ProfessionalApplication() {
     else if (!isValidUrl(linkedin)) errors.push("LinkedIn must be a valid URL (include https://).");
 
     if (!formData.phone.trim()) errors.push("Phone is required.");
-
     if (!formData.agree) errors.push("You must agree before submitting.");
 
-    const canSubmit = errors.length === 0 && !submitting;
+    const canSubmit = errors.length === 0 && !submitting && !prefilling;
     return { canSubmit, errors };
-  }, [formData, submitting, role]);
-
-  const onChange = (key: keyof FormState, value: any) => {
-    setFormData((prev) => ({ ...prev, [key]: value }));
-  };
+  }, [formData, submitting, prefilling, role]);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -152,11 +207,9 @@ export default function ProfessionalApplication() {
       const user = auth.currentUser;
       if (!user) throw new Error("You are signed out. Please sign in again.");
 
-      // force refresh token (helps after account switching)
       const token = await user.getIdToken(true);
       if (!token) throw new Error("Missing auth token. Please sign in again.");
 
-      // ✅ EXACT keys expected by your latest professionals_apply.php
       const payload = {
         primary_role: formData.primary_role.trim(),
         years_experience: formData.years_experience.trim(),
@@ -179,7 +232,6 @@ export default function ProfessionalApplication() {
       });
 
       toast.success("Application submitted successfully!");
-      setFormData(defaultState);
       navigate("/professional-dashboard");
     } catch (err: any) {
       console.error(err);
@@ -189,9 +241,25 @@ export default function ProfessionalApplication() {
     }
   };
 
+  // If auth is still loading, show loader
+  if (loading || prefilling) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background">
-      <Header />
+      {/* ✅ Use professional header mode if logged in as professional */}
+      <Header
+        mode={role === "professional" ? "professional" : "public"}
+        welcomeName={welcomeName}
+        subText={subText}
+        showProfileButton={role === "professional"}
+      />
+
       <main className="pt-28 pb-16">
         <div className="container mx-auto px-6">
           <div className="max-w-2xl mx-auto">
@@ -204,7 +272,7 @@ export default function ProfessionalApplication() {
               <CardContent>
                 {sanity.errors.length > 0 && (
                   <div className="mb-4 rounded-xl border p-3 text-sm">
-                    <p className="font-medium mb-1">Please fix:</p>
+                    <p className="font-medium mb-1">Almost there — please review:</p>
                     <ul className="list-disc pl-5 space-y-1">
                       {sanity.errors.slice(0, 5).map((e) => (
                         <li key={e}>{e}</li>

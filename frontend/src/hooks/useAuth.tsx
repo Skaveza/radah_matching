@@ -1,3 +1,4 @@
+// src/hooks/useAuth.tsx
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import {
   User,
@@ -31,7 +32,6 @@ type SignupPayload = {
   fullName: string;
   email: string;
   password: string;
-  role: "entrepreneur" | "professional";
   region: string;
   remember?: boolean;
 };
@@ -46,7 +46,10 @@ type AuthContextValue = {
   plan: string | null;
 
   refreshMe: () => Promise<MeResponse | null>;
-  usersSetup: (payload: { name: string; role: "entrepreneur" | "professional"; region: string }) => Promise<void>;
+
+  // new endpoints flow
+  saveBasicProfile: (payload: { name: string; region: string }) => Promise<void>;
+  saveRole: (role: "entrepreneur" | "professional") => Promise<void>;
 
   signUp: (p: SignupPayload) => Promise<void>;
   signIn: (email: string, password: string, remember?: boolean) => Promise<void>;
@@ -102,22 +105,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return me;
   };
 
-  const usersSetup = async (payload: { name: string; role: "entrepreneur" | "professional"; region: string }) => {
+  const saveBasicProfile = async (payload: { name: string; region: string }) => {
     const token = await auth.currentUser?.getIdToken().catch(() => null);
     const email = auth.currentUser?.email;
 
     if (!token) throw new Error("Missing auth token");
     if (!email) throw new Error("Missing email");
 
-    await apiFetch("/api/users/setup", {
+    await apiFetch("/api/users/basic-profile", {
       method: "POST",
       headers: getBearerHeaders(token, { "Content-Type": "application/json" }),
       body: JSON.stringify({
         name: payload.name,
         email,
-        role: payload.role,
         region: payload.region,
       }),
+    });
+
+    await refreshMe();
+  };
+
+  const saveRole = async (pickedRole: "entrepreneur" | "professional") => {
+    const token = await auth.currentUser?.getIdToken().catch(() => null);
+    if (!token) throw new Error("Missing auth token");
+
+    await apiFetch("/api/users/setup", {
+      method: "POST",
+      headers: getBearerHeaders(token, { "Content-Type": "application/json" }),
+      body: JSON.stringify({ role: pickedRole }),
     });
 
     await refreshMe();
@@ -129,7 +144,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const cred = await createUserWithEmailAndPassword(auth, p.email, p.password);
     await updateProfile(cred.user, { displayName: p.fullName });
 
-    await usersSetup({ name: p.fullName, role: p.role, region: p.region });
+    // Save basic profile only (NO role here)
+    await saveBasicProfile({ name: p.fullName, region: p.region });
   };
 
   const signIn = async (email: string, password: string, remember = getSavedRemember()) => {
@@ -142,7 +158,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await applyPersistence(remember);
     const provider = new GoogleAuthProvider();
     await signInWithPopup(auth, provider);
-    return await refreshMe(); // role may still be null for new Google user -> go SetupProfile
+    return await refreshMe(); // role may still be null for new Google user -> go choose-role
   };
 
   const signOut = async () => {
@@ -163,7 +179,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           await refreshMe();
         } catch {
-          // keep role as-is; UI can show "profile not loaded"
+          // keep state as-is
         }
       } else {
         setRole(null);
@@ -186,7 +202,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       payment_status,
       plan,
       refreshMe,
-      usersSetup,
+      saveBasicProfile,
+      saveRole,
       signUp,
       signIn,
       signInWithGoogle,
