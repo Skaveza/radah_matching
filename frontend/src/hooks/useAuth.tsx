@@ -11,6 +11,7 @@ import {
   GoogleAuthProvider,
   signInWithPopup,
   updateProfile,
+  onAuthStateChanged,
 } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { apiFetch } from "@/lib/api";
@@ -47,7 +48,6 @@ type AuthContextValue = {
 
   refreshMe: () => Promise<MeResponse | null>;
 
-  // new endpoints flow
   saveBasicProfile: (payload: { name: string; region: string }) => Promise<void>;
   saveRole: (role: "entrepreneur" | "professional") => Promise<void>;
 
@@ -92,9 +92,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setPlan(me.plan ?? null);
   };
 
+  /**
+   * ✅ Refresh /api/me with a guaranteed Bearer token.
+   * - Throws if called too early (no user yet). This prevents "silent null" causing bad redirects.
+   * - Uses getIdToken(true) to reduce random 401s after refresh.
+   */
   const refreshMe = async (): Promise<MeResponse | null> => {
-    const token = await auth.currentUser?.getIdToken().catch(() => null);
-    if (!token) return null;
+    const u = auth.currentUser;
+    if (!u) {
+      // Called before Firebase restored session (common on hard refresh)
+      throw new Error("No authenticated user yet");
+    }
+
+    const token = await u.getIdToken(true);
 
     const me = await apiFetch<MeResponse>("/api/me", {
       method: "GET",
@@ -106,11 +116,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const saveBasicProfile = async (payload: { name: string; region: string }) => {
-    const token = await auth.currentUser?.getIdToken().catch(() => null);
-    const email = auth.currentUser?.email;
+    const u = auth.currentUser;
+    const email = u?.email;
 
-    if (!token) throw new Error("Missing auth token");
+    if (!u) throw new Error("No authenticated user");
     if (!email) throw new Error("Missing email");
+
+    const token = await u.getIdToken(true);
 
     await apiFetch("/api/users/basic-profile", {
       method: "POST",
@@ -126,8 +138,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const saveRole = async (pickedRole: "entrepreneur" | "professional") => {
-    const token = await auth.currentUser?.getIdToken().catch(() => null);
-    if (!token) throw new Error("Missing auth token");
+    const u = auth.currentUser;
+    if (!u) throw new Error("No authenticated user");
+
+    const token = await u.getIdToken(true);
 
     await apiFetch("/api/users/setup", {
       method: "POST",
@@ -151,6 +165,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = async (email: string, password: string, remember = getSavedRemember()) => {
     await applyPersistence(remember);
     await signInWithEmailAndPassword(auth, email, password);
+
+    // After sign in, token exists; refreshMe will work.
     await refreshMe();
   };
 
@@ -158,7 +174,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await applyPersistence(remember);
     const provider = new GoogleAuthProvider();
     await signInWithPopup(auth, provider);
-    return await refreshMe(); // role may still be null for new Google user -> go choose-role
+
+    // New Google users may not have role yet; refreshMe returns role/null depending on backend profile.
+    return await refreshMe();
   };
 
   const signOut = async () => {
@@ -170,12 +188,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    const unsub = auth.onAuthStateChanged(async (u) => {
+    const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       setLoading(false);
 
       if (u) {
-        // best-effort refresh (don’t crash the app if API is down)
+        // Best-effort refresh; don't crash UI if backend is down
         try {
           await refreshMe();
         } catch {

@@ -1,7 +1,7 @@
 <?php
-require __DIR__ . '/../bootstrap.php';
-require __DIR__ . '/../firestore_service.php';
-require __DIR__ . '/middlewear/firebase_middlewear_v2.php';
+require_once __DIR__ . '/../bootstrap.php';
+require_once __DIR__ . '/../firestore_service.php';
+require_once __DIR__ . '/middlewear/firebase_middlewear_v2.php';
 
 header("Content-Type: application/json");
 
