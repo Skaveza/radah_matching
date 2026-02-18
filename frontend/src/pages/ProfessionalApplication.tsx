@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Header from "@/components/landing/Header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,14 +6,24 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Loader2, CheckCircle2, ShieldCheck } from "lucide-react";
+import {
+  Loader2,
+  CheckCircle2,
+  ShieldCheck,
+  AlertTriangle,
+  ChevronDown,
+  Search,
+} from "lucide-react";
 
 import { auth } from "@/lib/firebase";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
+
+// ✅ Shadcn popover/command (Combobox pattern)
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "@/components/ui/command";
 
 const PRIMARY_ROLES = [
   "technical_lead",
@@ -83,8 +93,70 @@ const defaultState: FormState = {
   agree: false,
 };
 
+// ✅ Professional title casing + acronyms map
 function prettyLabel(v: string) {
-  return v.replace(/_/g, " ").replace("aiml", "AI/ML").replace("b2b", "B2B").replace("hr", "HR");
+  const raw = String(v || "").trim();
+
+  const fixedMap: Record<string, string> = {
+    aiml: "AI/ML",
+    b2b: "B2B",
+    hr: "HR",
+    qa: "QA",
+    uiux: "UI/UX",
+    devops: "DevOps",
+    ecommerce: "E-commerce",
+    legal: "Legal",
+    tech: "Tech",
+    edtech: "EdTech",
+    fintech: "FinTech",
+    cybersecurity: "Cybersecurity",
+    marketplace: "Marketplace",
+    software: "Software",
+    development: "Development",
+    supply: "Supply",
+    chain: "Chain",
+    logistics: "Logistics",
+    travel: "Travel",
+    hospitality: "Hospitality",
+    real: "Real",
+    estate: "Estate",
+    media: "Media",
+    entertainment: "Entertainment",
+    consumer: "Consumer",
+    apps: "Apps",
+    product: "Product",
+    manager: "Manager",
+    engineer: "Engineer",
+    designer: "Designer",
+    analyst: "Analyst",
+    strategist: "Strategist",
+    writer: "Writer",
+    full: "Full",
+    stack: "Stack",
+    frontend: "Frontend",
+    backend: "Backend",
+    technical: "Technical",
+    lead: "Lead",
+    content: "Content",
+    data: "Data",
+    healthcare: "Healthcare",
+  };
+
+  if (fixedMap[raw]) return fixedMap[raw];
+
+  const words = raw
+    .split("_")
+    .filter(Boolean)
+    .map((w) => fixedMap[w] ?? w);
+
+  const titled = words
+    .map((w) => {
+      if (/[A-Z]{2,}|\/|-/g.test(w)) return w;
+      return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+    })
+    .join(" ");
+
+  return titled;
 }
 
 function isValidUrl(s: string) {
@@ -100,17 +172,25 @@ function formatRangeLabel(v: string) {
   return v.replace(/_/g, "-").replace("plus", "+");
 }
 
-function SectionHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+// ✅ small UI helpers
+function SectionPanel({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="space-y-1">
-      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-      {subtitle ? <p className="text-xs text-muted-foreground">{subtitle}</p> : null}
+    <div className="rounded-2xl border bg-muted/10 p-5 space-y-4">
+      <div className="space-y-1">
+        <div className="text-sm font-semibold text-foreground">{title}</div>
+        {subtitle ? <div className="text-xs text-muted-foreground">{subtitle}</div> : null}
+      </div>
+      {children}
     </div>
   );
-}
-
-function Divider() {
-  return <div className="h-px bg-border" />;
 }
 
 function FieldHint({ children }: { children: React.ReactNode }) {
@@ -129,11 +209,35 @@ export default function ProfessionalApplication() {
   const [submitting, setSubmitting] = useState(false);
   const [prefilling, setPrefilling] = useState(true);
 
+  // ✅ show top error panel only after submit attempt
+  const [attemptedSubmit, setAttemptedSubmit] = useState(false);
+
+  // ✅ combobox state
+  const [industryOpen, setIndustryOpen] = useState(false);
+
+  // ✅ refs for jump-to-field
+  const refs = useRef<Record<string, HTMLElement | null>>({});
+
   const welcomeName = user?.displayName || user?.email?.split("@")[0] || null;
   const subText = user?.email ? `Signed in as ${user.email}` : null;
 
   const onChange = (key: keyof FormState, value: any) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const setFieldRef = (key: keyof FormState) => (el: HTMLElement | null) => {
+    refs.current[key] = el;
+  };
+
+  const jumpToField = (key: keyof FormState) => {
+    const el = refs.current[key];
+    if (!el) return;
+
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    // focus if it supports
+    // @ts-ignore
+    if (typeof el.focus === "function") el.focus();
   };
 
   // Prefill from /api/professionals/me if exists
@@ -144,7 +248,6 @@ export default function ProfessionalApplication() {
       try {
         setPrefilling(true);
 
-        // if not logged in, allow view but block submission
         const u = auth.currentUser;
         if (!u) return;
 
@@ -161,13 +264,11 @@ export default function ProfessionalApplication() {
           const status = String(prof.status ?? "").toLowerCase();
           const approved = prof.approved === true || status === "approved";
 
-          // already approved => go to dashboard
           if (approved) {
             navigate("/professional-dashboard", { replace: true });
             return;
           }
 
-          // Prefill fields if pending/rejected
           setFormData((p) => ({
             ...p,
             primary_role: prof.primary_role ?? p.primary_role,
@@ -184,18 +285,19 @@ export default function ProfessionalApplication() {
           }));
         }
       } catch {
-        // ignore: if endpoint fails, user can still fill manually
+        // ignore
       } finally {
         setPrefilling(false);
       }
     })();
   }, [loading, navigate]);
 
+  // ✅ field-level errors (for inline validation + jump list)
   const fieldErrors = useMemo(() => {
     const e: Partial<Record<keyof FormState, string>> = {};
 
     // account-level
-    if (!auth.currentUser) e.agree = "You are signed out. Please sign in again.";
+    if (!auth.currentUser) e.agree = "You are signed out. Please sign in again to submit.";
     if (role && role !== "professional") e.agree = "You must be signed in as a professional to apply.";
 
     if (!formData.primary_role) e.primary_role = "Primary role is required.";
@@ -205,42 +307,44 @@ export default function ProfessionalApplication() {
     if (!formData.availability) e.availability = "Availability is required.";
 
     const summaryLen = formData.professional_summary.trim().length;
-    if (summaryLen < 20) e.professional_summary = "Professional summary must be at least 20 characters.";
+    if (summaryLen < 20) e.professional_summary = "Summary must be at least 20 characters.";
 
     const linkedin = formData.linkedin.trim();
     if (!linkedin) e.linkedin = "LinkedIn URL is required.";
     else if (!isValidUrl(linkedin)) e.linkedin = "LinkedIn must be a valid URL (include https://).";
 
     if (!formData.phone.trim()) e.phone = "Phone is required.";
-    if (!formData.agree) e.agree = "You must agree before submitting.";
+    if (!formData.agree) e.agree = e.agree || "You must agree before submitting.";
 
     return e;
   }, [formData, role]);
 
+  const errorList = useMemo(() => {
+    const items: { key: keyof FormState; label: string; message: string }[] = [];
+
+    const push = (key: keyof FormState, label: string) => {
+      const msg = fieldErrors[key];
+      if (msg) items.push({ key, label, message: msg });
+    };
+
+    push("primary_role", "Primary Role");
+    push("years_experience", "Years of Experience");
+    push("industry", "Industry Experience");
+    push("professional_summary", "Professional Summary");
+    push("hourly_rate_range", "Hourly Rate Range");
+    push("availability", "Availability");
+    push("linkedin", "LinkedIn");
+    push("phone", "Phone");
+    push("agree", "Consent");
+
+    return items;
+  }, [fieldErrors]);
+
   const sanity = useMemo(() => {
-    const errors: string[] = [];
-
-    if (!auth.currentUser) errors.push("You are signed out. Please sign in again.");
-    if (role && role !== "professional") errors.push("You must be signed in as a professional to apply.");
-
-    if (!formData.primary_role) errors.push("Primary role is required.");
-    if (!formData.years_experience) errors.push("Years of experience is required.");
-    if (!formData.industry) errors.push("Industry experience is required.");
-    if (!formData.hourly_rate_range) errors.push("Hourly rate range is required.");
-    if (!formData.availability) errors.push("Availability is required.");
-    if (formData.professional_summary.trim().length < 20)
-      errors.push("Professional summary must be at least 20 characters.");
-
-    const linkedin = formData.linkedin.trim();
-    if (!linkedin) errors.push("LinkedIn URL is required.");
-    else if (!isValidUrl(linkedin)) errors.push("LinkedIn must be a valid URL (include https://).");
-
-    if (!formData.phone.trim()) errors.push("Phone is required.");
-    if (!formData.agree) errors.push("You must agree before submitting.");
-
+    const errors = errorList.map((x) => x.message);
     const canSubmit = errors.length === 0 && !submitting && !prefilling;
     return { canSubmit, errors };
-  }, [formData, submitting, prefilling, role]);
+  }, [errorList, submitting, prefilling]);
 
   const completion = useMemo(() => {
     const checks = [
@@ -262,9 +366,12 @@ export default function ProfessionalApplication() {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAttemptedSubmit(true);
 
     if (!sanity.canSubmit) {
-      toast.error(sanity.errors[0] || "Please complete all required fields.");
+      const first = errorList[0];
+      toast.error(first?.message || "Please complete all required fields.");
+      if (first?.key) jumpToField(first.key);
       return;
     }
 
@@ -325,27 +432,28 @@ export default function ProfessionalApplication() {
         showProfileButton={role === "professional"}
       />
 
-      <main className="pt-28 pb-16">
+      <main className="pt-28 pb-20">
         <div className="container mx-auto px-6">
-          <div className="max-w-2xl mx-auto">
-            {/* subtle frame */}
-            <div className="rounded-3xl p-[1px] bg-gradient-to-r from-border/40 via-border to-border/40">
-              <Card className="rounded-3xl shadow-sm">
-                <CardHeader className="space-y-3">
+          <div className="max-w-3xl mx-auto">
+            {/* Premium frame */}
+            <div className="rounded-[28px] p-[1px] bg-gradient-to-r from-border/40 via-border to-border/40">
+              <Card className="rounded-[28px] shadow-sm">
+                <CardHeader className="space-y-4">
                   <div className="flex items-start justify-between gap-4">
                     <div className="space-y-1">
                       <CardTitle className="text-2xl">Professional Application</CardTitle>
-                      <CardDescription>Apply to join our professional network.</CardDescription>
+                      <CardDescription>
+                        Apply to join our professional network. Your profile becomes visible after approval.
+                      </CardDescription>
                     </div>
 
-                    {/* Completion */}
                     <div className="text-right">
                       <div className="text-xs text-muted-foreground">Completion</div>
                       <div className="text-sm font-semibold">{completion.pct}%</div>
                     </div>
                   </div>
 
-                  {/* progress bar */}
+                  {/* progress */}
                   <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
                     <div
                       className="h-2 rounded-full bg-primary transition-all"
@@ -356,244 +464,345 @@ export default function ProfessionalApplication() {
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span className="inline-flex items-center gap-1">
                       <CheckCircle2 className="w-4 h-4" />
-                      Step-by-step form (about 2–3 minutes)
+                      Takes ~2–3 minutes
                     </span>
                     <span className="inline-flex items-center gap-1">
                       <ShieldCheck className="w-4 h-4" />
-                      Your data is used for matching and review
+                      Used for matching & review
                     </span>
                   </div>
                 </CardHeader>
 
-                <CardContent>
-                  {/* Top summary errors */}
-                  {sanity.errors.length > 0 && (
-                    <div className="mb-5 rounded-2xl border p-4 text-sm bg-muted/20">
-                      <p className="font-medium mb-2">Almost there — please review:</p>
-                      <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
-                        {sanity.errors.slice(0, 5).map((e) => (
-                          <li key={e}>{e}</li>
-                        ))}
-                      </ul>
+                <CardContent className="space-y-6">
+                  {/* ✅ Improved "Almost there" panel: only after submit attempt */}
+                  {attemptedSubmit && errorList.length > 0 && (
+                    <div className="rounded-2xl border bg-muted/20 p-4">
+                      <div className="flex items-start gap-3">
+                        <div className="mt-0.5 rounded-full bg-destructive/10 p-2">
+                          <AlertTriangle className="w-4 h-4 text-destructive" />
+                        </div>
+                        <div className="flex-1 space-y-2">
+                          <div className="font-medium">Please review a few fields</div>
+                          <div className="text-sm text-muted-foreground">
+                            Click an item to jump directly to it.
+                          </div>
+
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            {errorList.slice(0, 6).map((e) => (
+                              <button
+                                type="button"
+                                key={`${e.key}-${e.message}`}
+                                onClick={() => jumpToField(e.key)}
+                                className="text-left rounded-xl border bg-background/60 hover:bg-background transition-colors px-3 py-2"
+                              >
+                                <div className="text-xs font-semibold text-foreground">{e.label}</div>
+                                <div className="text-xs text-muted-foreground">{e.message}</div>
+                              </button>
+                            ))}
+                          </div>
+
+                          {errorList.length > 6 ? (
+                            <div className="text-xs text-muted-foreground">
+                              + {errorList.length - 6} more…
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                   )}
 
                   <form onSubmit={onSubmit} className="space-y-6">
-                    {/* SECTION 1 */}
-                    <SectionHeader
+                    {/* Section 1 */}
+                    <SectionPanel
                       title="Role & Experience"
-                      subtitle="Tell us how you want to be matched and your level of experience."
-                    />
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label>Primary Role *</Label>
-                        <Select value={formData.primary_role} onValueChange={(v) => onChange("primary_role", v)}>
-                          <SelectTrigger
-                            className={fieldErrors.primary_role ? "border-destructive focus:ring-destructive" : ""}
+                      subtitle="Select how you want to be matched and your experience level."
+                    >
+                      <div className="grid md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">Primary Role *</Label>
+                          <select
+                            ref={setFieldRef("primary_role")}
+                            value={formData.primary_role}
+                            onChange={(e) => onChange("primary_role", e.target.value)}
+                            className={`w-full h-10 rounded-md border bg-background px-3 text-sm ${
+                              fieldErrors.primary_role ? "border-destructive focus:outline-none" : ""
+                            }`}
                           >
-                            <SelectValue placeholder="Select role" />
-                          </SelectTrigger>
-                          <SelectContent>
+                            <option value="" className="text-muted-foreground">
+                              Select role
+                            </option>
                             {PRIMARY_ROLES.map((r) => (
-                              <SelectItem key={r} value={r}>
+                              <option key={r} value={r}>
                                 {prettyLabel(r)}
-                              </SelectItem>
+                              </option>
                             ))}
-                          </SelectContent>
-                        </Select>
-                        <FieldHint>Pick the role you want entrepreneurs to see first.</FieldHint>
-                        {fieldErrors.primary_role ? <FieldError>{fieldErrors.primary_role}</FieldError> : null}
-                      </div>
+                          </select>
+                          <FieldHint>Choose the role you want entrepreneurs to see first.</FieldHint>
+                          {attemptedSubmit && fieldErrors.primary_role ? (
+                            <FieldError>{fieldErrors.primary_role}</FieldError>
+                          ) : null}
+                        </div>
 
-                      <div className="space-y-2">
-                        <Label>Years of Experience *</Label>
-                        <Select value={formData.years_experience} onValueChange={(v) => onChange("years_experience", v)}>
-                          <SelectTrigger
-                            className={fieldErrors.years_experience ? "border-destructive focus:ring-destructive" : ""}
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">Years of Experience *</Label>
+                          <select
+                            ref={setFieldRef("years_experience")}
+                            value={formData.years_experience}
+                            onChange={(e) => onChange("years_experience", e.target.value)}
+                            className={`w-full h-10 rounded-md border bg-background px-3 text-sm ${
+                              fieldErrors.years_experience ? "border-destructive focus:outline-none" : ""
+                            }`}
                           >
-                            <SelectValue placeholder="Select experience" />
-                          </SelectTrigger>
-                          <SelectContent>
+                            <option value="" className="text-muted-foreground">
+                              Select experience
+                            </option>
                             {YEARS_EXPERIENCE.map((x) => (
-                              <SelectItem key={x} value={x}>
+                              <option key={x} value={x}>
                                 {formatRangeLabel(x)}
-                              </SelectItem>
+                              </option>
                             ))}
-                          </SelectContent>
-                        </Select>
-                        <FieldHint>This helps us match you with the right level of projects.</FieldHint>
-                        {fieldErrors.years_experience ? <FieldError>{fieldErrors.years_experience}</FieldError> : null}
+                          </select>
+                          <FieldHint>This helps us match you with the right level of projects.</FieldHint>
+                          {attemptedSubmit && fieldErrors.years_experience ? (
+                            <FieldError>{fieldErrors.years_experience}</FieldError>
+                          ) : null}
+                        </div>
                       </div>
-                    </div>
 
-                    <div className="space-y-2">
-                      <Label>Industry Experience *</Label>
-                      <Select value={formData.industry} onValueChange={(v) => onChange("industry", v)}>
-                        <SelectTrigger className={fieldErrors.industry ? "border-destructive focus:ring-destructive" : ""}>
-                          <SelectValue placeholder="Select industry" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {INDUSTRY_EXPERIENCE.map((ind) => (
-                            <SelectItem key={ind} value={ind}>
-                              {prettyLabel(ind)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FieldHint>Select the industry where you’ve done your most relevant work.</FieldHint>
-                      {fieldErrors.industry ? <FieldError>{fieldErrors.industry}</FieldError> : null}
-                    </div>
+                      {/* ✅ Searchable Industry Combobox */}
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">Industry Experience *</Label>
 
-                    <Divider />
+                        <Popover open={industryOpen} onOpenChange={setIndustryOpen}>
+                          <PopoverTrigger asChild>
+                            <Button
+                              ref={setFieldRef("industry") as any}
+                              type="button"
+                              variant="outline"
+                              className={`w-full justify-between rounded-md ${
+                                fieldErrors.industry ? "border-destructive" : ""
+                              }`}
+                            >
+                              <span className={formData.industry ? "" : "text-muted-foreground"}>
+                                {formData.industry ? prettyLabel(formData.industry) : "Select industry"}
+                              </span>
+                              <ChevronDown className="w-4 h-4 opacity-60" />
+                            </Button>
+                          </PopoverTrigger>
 
-                    {/* SECTION 2 */}
-                    <SectionHeader
+                          <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                            <Command>
+                              <CommandInput placeholder="Search industry..." />
+                              <CommandEmpty>No results found.</CommandEmpty>
+                              <CommandGroup>
+                                {INDUSTRY_EXPERIENCE.map((ind) => (
+                                  <CommandItem
+                                    key={ind}
+                                    value={prettyLabel(ind)}
+                                    onSelect={() => {
+                                      onChange("industry", ind);
+                                      setIndustryOpen(false);
+                                    }}
+                                  >
+                                    <Search className="w-4 h-4 mr-2 opacity-60" />
+                                    {prettyLabel(ind)}
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                            </Command>
+                          </PopoverContent>
+                        </Popover>
+
+                        <FieldHint>Pick the industry where you’ve done your most relevant work.</FieldHint>
+                        {attemptedSubmit && fieldErrors.industry ? (
+                          <FieldError>{fieldErrors.industry}</FieldError>
+                        ) : null}
+                      </div>
+                    </SectionPanel>
+
+                    {/* Section 2 */}
+                    <SectionPanel
                       title="What you offer"
-                      subtitle="Write a short summary that shows your strengths (keep it clear and specific)."
-                    />
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <Label>Professional Summary *</Label>
-                        <span className="text-xs text-muted-foreground">
-                          {formData.professional_summary.trim().length}/300
-                        </span>
+                      subtitle="Write a short, clear summary (stack + impact)."
+                    >
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-sm font-medium">Professional Summary *</Label>
+                          <span className="text-xs text-muted-foreground">
+                            {formData.professional_summary.trim().length}/300
+                          </span>
+                        </div>
+
+                        <Textarea
+                          ref={setFieldRef("professional_summary") as any}
+                          value={formData.professional_summary}
+                          onChange={(e) => onChange("professional_summary", e.target.value)}
+                          placeholder="Example: I’m a Full Stack Developer specializing in React + Node.js. I build scalable dashboards and APIs, focusing on performance and clean architecture..."
+                          rows={6}
+                          maxLength={300}
+                          className={fieldErrors.professional_summary ? "border-destructive focus:ring-destructive" : ""}
+                        />
+
+                        <FieldHint>Minimum 20 characters. Mention skills + outcomes (e.g., speed, reliability, growth).</FieldHint>
+                        {attemptedSubmit && fieldErrors.professional_summary ? (
+                          <FieldError>{fieldErrors.professional_summary}</FieldError>
+                        ) : null}
                       </div>
-                      <Textarea
-                        value={formData.professional_summary}
-                        onChange={(e) => onChange("professional_summary", e.target.value)}
-                        placeholder="Example: I build scalable web apps with React + Node.js, focusing on performance and clean architecture..."
-                        rows={6}
-                        maxLength={300}
-                        className={fieldErrors.professional_summary ? "border-destructive focus:ring-destructive" : ""}
-                      />
-                      <FieldHint>Minimum 20 characters. Mention your stack + strongest outcomes.</FieldHint>
-                      {fieldErrors.professional_summary ? (
-                        <FieldError>{fieldErrors.professional_summary}</FieldError>
-                      ) : null}
-                    </div>
+                    </SectionPanel>
 
-                    <Divider />
-
-                    {/* SECTION 3 */}
-                    <SectionHeader
+                    {/* Section 3 */}
+                    <SectionPanel
                       title="Rates & availability"
-                      subtitle="This helps entrepreneurs understand your expected commitment and pricing."
-                    />
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label>Hourly Rate Range *</Label>
-                        <Select value={formData.hourly_rate_range} onValueChange={(v) => onChange("hourly_rate_range", v)}>
-                          <SelectTrigger
-                            className={fieldErrors.hourly_rate_range ? "border-destructive focus:ring-destructive" : ""}
+                      subtitle="Help teams understand your pricing and time commitment."
+                    >
+                      <div className="grid md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">Hourly Rate Range *</Label>
+                          <select
+                            ref={setFieldRef("hourly_rate_range")}
+                            value={formData.hourly_rate_range}
+                            onChange={(e) => onChange("hourly_rate_range", e.target.value)}
+                            className={`w-full h-10 rounded-md border bg-background px-3 text-sm ${
+                              fieldErrors.hourly_rate_range ? "border-destructive focus:outline-none" : ""
+                            }`}
                           >
-                            <SelectValue placeholder="Select rate range" />
-                          </SelectTrigger>
-                          <SelectContent>
+                            <option value="" className="text-muted-foreground">
+                              Select rate range
+                            </option>
                             {HOURLY_RATE_RANGE.map((r) => (
-                              <SelectItem key={r} value={r}>
+                              <option key={r} value={r}>
                                 {formatRangeLabel(r)}
-                              </SelectItem>
+                              </option>
                             ))}
-                          </SelectContent>
-                        </Select>
-                        <FieldHint>Choose the range that best matches your current expectations.</FieldHint>
-                        {fieldErrors.hourly_rate_range ? <FieldError>{fieldErrors.hourly_rate_range}</FieldError> : null}
-                      </div>
+                          </select>
+                          <FieldHint>Select the closest range for your current expectations.</FieldHint>
+                          {attemptedSubmit && fieldErrors.hourly_rate_range ? (
+                            <FieldError>{fieldErrors.hourly_rate_range}</FieldError>
+                          ) : null}
+                        </div>
 
-                      <div className="space-y-2">
-                        <Label>Availability *</Label>
-                        <Select value={formData.availability} onValueChange={(v) => onChange("availability", v)}>
-                          <SelectTrigger className={fieldErrors.availability ? "border-destructive focus:ring-destructive" : ""}>
-                            <SelectValue placeholder="Select availability" />
-                          </SelectTrigger>
-                          <SelectContent>
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">Availability *</Label>
+                          <select
+                            ref={setFieldRef("availability")}
+                            value={formData.availability}
+                            onChange={(e) => onChange("availability", e.target.value)}
+                            className={`w-full h-10 rounded-md border bg-background px-3 text-sm ${
+                              fieldErrors.availability ? "border-destructive focus:outline-none" : ""
+                            }`}
+                          >
+                            <option value="" className="text-muted-foreground">
+                              Select availability
+                            </option>
                             {AVAILABILITY.map((a) => (
-                              <SelectItem key={a} value={a}>
+                              <option key={a} value={a}>
                                 {prettyLabel(a)}
-                              </SelectItem>
+                              </option>
                             ))}
-                          </SelectContent>
-                        </Select>
-                        <FieldHint>How much time can you realistically commit?</FieldHint>
-                        {fieldErrors.availability ? <FieldError>{fieldErrors.availability}</FieldError> : null}
+                          </select>
+                          <FieldHint>Choose the level you can reliably maintain.</FieldHint>
+                          {attemptedSubmit && fieldErrors.availability ? (
+                            <FieldError>{fieldErrors.availability}</FieldError>
+                          ) : null}
+                        </div>
                       </div>
-                    </div>
+                    </SectionPanel>
 
-                    <Divider />
-
-                    {/* SECTION 4 */}
-                    <SectionHeader
+                    {/* Section 4 */}
+                    <SectionPanel
                       title="Links & contact"
-                      subtitle="Provide your professional link(s) so we can verify and contact you."
-                    />
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label>LinkedIn *</Label>
-                        <Input
-                          value={formData.linkedin}
-                          onChange={(e) => onChange("linkedin", e.target.value)}
-                          placeholder="https://linkedin.com/in/..."
-                          className={fieldErrors.linkedin ? "border-destructive focus:ring-destructive" : ""}
-                        />
-                        <FieldHint>Must include https://</FieldHint>
-                        {fieldErrors.linkedin ? <FieldError>{fieldErrors.linkedin}</FieldError> : null}
+                      subtitle="These help us verify and contact you."
+                    >
+                      <div className="grid md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">LinkedIn *</Label>
+                          <Input
+                            ref={setFieldRef("linkedin") as any}
+                            value={formData.linkedin}
+                            onChange={(e) => onChange("linkedin", e.target.value)}
+                            placeholder="https://linkedin.com/in/..."
+                            className={fieldErrors.linkedin ? "border-destructive focus:ring-destructive" : ""}
+                          />
+                          <FieldHint>Must include https://</FieldHint>
+                          {attemptedSubmit && fieldErrors.linkedin ? (
+                            <FieldError>{fieldErrors.linkedin}</FieldError>
+                          ) : null}
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">Portfolio (optional)</Label>
+                          <Input
+                            ref={setFieldRef("portfolio") as any}
+                            value={formData.portfolio}
+                            onChange={(e) => onChange("portfolio", e.target.value)}
+                            placeholder="https://yourportfolio.com"
+                          />
+                          <FieldHint>GitHub, website, Notion, Dribbble — anything that shows your work.</FieldHint>
+                        </div>
                       </div>
 
                       <div className="space-y-2">
-                        <Label>Portfolio (optional)</Label>
+                        <Label className="text-sm font-medium">Phone *</Label>
                         <Input
-                          value={formData.portfolio}
-                          onChange={(e) => onChange("portfolio", e.target.value)}
-                          placeholder="https://yourportfolio.com"
+                          ref={setFieldRef("phone") as any}
+                          value={formData.phone}
+                          onChange={(e) => onChange("phone", e.target.value)}
+                          placeholder="+250..."
+                          className={fieldErrors.phone ? "border-destructive focus:ring-destructive" : ""}
                         />
-                        <FieldHint>GitHub, website, Notion, Dribbble — anything that shows your work.</FieldHint>
+                        <FieldHint>Include country code (e.g. +250...).</FieldHint>
+                        {attemptedSubmit && fieldErrors.phone ? (
+                          <FieldError>{fieldErrors.phone}</FieldError>
+                        ) : null}
                       </div>
-                    </div>
+                    </SectionPanel>
 
-                    <div className="space-y-2">
-                      <Label>Phone *</Label>
-                      <Input
-                        value={formData.phone}
-                        onChange={(e) => onChange("phone", e.target.value)}
-                        placeholder="+250..."
-                        className={fieldErrors.phone ? "border-destructive focus:ring-destructive" : ""}
-                      />
-                      <FieldHint>Include country code (example: +250...).</FieldHint>
-                      {fieldErrors.phone ? <FieldError>{fieldErrors.phone}</FieldError> : null}
-                    </div>
-
-                    <Divider />
-
-                    {/* SECTION 5 */}
-                    <SectionHeader
+                    {/* Section 5 */}
+                    <SectionPanel
                       title="Consent"
-                      subtitle="Confirm your information is correct so we can process your application."
-                    />
-                    <div className="flex items-start gap-3 pt-1">
-                      <Checkbox
-                        checked={formData.agree}
-                        onCheckedChange={(v) => onChange("agree", Boolean(v))}
-                        id="agree"
-                      />
-                      <div className="space-y-1">
-                        <Label htmlFor="agree" className="leading-snug">
-                          I confirm the information provided is accurate and I agree to be contacted.
-                        </Label>
-                        <p className="text-xs text-muted-foreground">
-                          You can update your profile later from your dashboard.
-                        </p>
-                        {fieldErrors.agree ? <FieldError>{fieldErrors.agree}</FieldError> : null}
+                      subtitle="Confirm your information is accurate so we can process your application."
+                    >
+                      <div className="flex items-start gap-3">
+                        <Checkbox
+                          ref={setFieldRef("agree") as any}
+                          checked={formData.agree}
+                          onCheckedChange={(v) => onChange("agree", Boolean(v))}
+                          id="agree"
+                        />
+                        <div className="space-y-1">
+                          <Label htmlFor="agree" className="leading-snug text-sm font-medium">
+                            I confirm the information provided is accurate and I agree to be contacted.
+                          </Label>
+                          <p className="text-xs text-muted-foreground">
+                            You can update your profile later from your dashboard.
+                          </p>
+                          {attemptedSubmit && fieldErrors.agree ? <FieldError>{fieldErrors.agree}</FieldError> : null}
+                        </div>
+                      </div>
+                    </SectionPanel>
+
+                    {/* Sticky Submit Bar */}
+                    <div className="sticky bottom-0 z-10 -mx-6 px-6 pt-4 pb-4 bg-background/80 backdrop-blur border-t">
+                      <div className="max-w-3xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+                        <div className="w-full sm:w-auto">
+                          <div className="text-xs text-muted-foreground">Completion</div>
+                          <div className="text-sm font-semibold">{completion.pct}%</div>
+                          <div className="w-56 h-2 mt-2 rounded-full bg-muted overflow-hidden hidden sm:block">
+                            <div className="h-2 rounded-full bg-primary" style={{ width: `${completion.pct}%` }} />
+                          </div>
+                        </div>
+
+                        <div className="w-full sm:w-auto flex flex-col items-stretch sm:items-end gap-2">
+                          <Button type="submit" className="w-full sm:w-[220px] rounded-xl" disabled={!sanity.canSubmit}>
+                            {submitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                            Submit Application
+                          </Button>
+                          <p className="text-xs text-muted-foreground text-center sm:text-right">
+                            Strong summary + valid LinkedIn increases approval speed.
+                          </p>
+                        </div>
                       </div>
                     </div>
-
-                    <Button type="submit" className="w-full rounded-xl" disabled={!sanity.canSubmit}>
-                      {submitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                      Submit Application
-                    </Button>
-
-                    <p className="text-xs text-muted-foreground text-center">
-                      Tip: A clear summary + valid LinkedIn increases approval speed.
-                    </p>
                   </form>
                 </CardContent>
               </Card>
