@@ -2,7 +2,6 @@ export const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   let res: Response;
-
   try {
     res = await fetch(`${API_BASE}${path}`, {
       ...options,
@@ -11,11 +10,13 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
   } catch (e: any) {
     throw new Error(
       `Network error: Failed to reach API (${API_BASE}). Is your backend running?\n` +
-        `Details: ${e?.message || "Failed to fetch"}`
+      `Details: ${e?.message || "Failed to fetch"}`
     );
   }
 
   const text = await res.text();
+  console.log("[apiFetch]", path, "status:", res.status, "text:", text.slice(0, 300));
+
   const contentType = res.headers.get("content-type") || "";
   const isJson = contentType.includes("application/json");
 
