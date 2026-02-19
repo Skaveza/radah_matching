@@ -15,7 +15,9 @@ RUN sed -i 's!/var/www/html!/var/www/html/public!g' /etc/apache2/apache2.conf
 
 COPY . /var/www/html/
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-RUN composer install --no-dev --optimize-autoloader
+
+RUN composer install --no-dev --optimize-autoloader --ignore-platform-req=ext-grpc
+
 RUN chown -R www-data:www-data /var/www/html
 
 EXPOSE 80
