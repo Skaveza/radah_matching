@@ -78,6 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const applyMe = useCallback((me: MeResponse | null) => {
     if (!me) return;
+    console.log("[applyMe] setting role:", me.role, "full me:", JSON.stringify(me));
     setRole(me.role ?? null);
     setProfessionalStatus(me.professional_status ?? null);
     setPaymentStatus(me.payment_status ?? null);
@@ -92,6 +93,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       method: "GET",
       headers: getBearerHeaders(token),
     });
+    console.log("[refreshMe] raw response:", JSON.stringify(me));
     applyMe(me);
     return me;
   }, [applyMe]);
@@ -157,8 +159,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (u) {
         try {
           await refreshMe();
-        } catch {
-          // keep state as-is
+        } catch (e) {
+          console.error("[onAuthStateChanged] refreshMe failed:", e);
         }
       } else {
         setRole(null);
