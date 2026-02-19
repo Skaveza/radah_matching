@@ -1,4 +1,5 @@
 <?php
+error_log("[FirestoreService] Loaded from: " . __FILE__ . " | transport=rest");
 require_once __DIR__ . '/vendor/autoload.php';
 use Kreait\Firebase\Factory;
 
