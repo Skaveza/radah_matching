@@ -1,6 +1,5 @@
 <?php
 require_once __DIR__ . '/vendor/autoload.php';
-
 use Kreait\Firebase\Factory;
 
 class FirestoreService
@@ -30,8 +29,11 @@ class FirestoreService
             @chmod($tempFile, 0600);
         }
 
-        $factory = (new Factory)->withServiceAccount($tempFile);
-        $this->firestore = $factory->createFirestore()->database();
+        $this->firestore = new \Google\Cloud\Firestore\FirestoreClient([
+            'projectId' => $data['project_id'],
+            'keyFilePath' => $tempFile,
+            'transport' => 'rest',
+        ]);
     }
 
     public function db()
