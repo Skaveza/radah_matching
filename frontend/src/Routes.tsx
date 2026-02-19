@@ -26,14 +26,8 @@ import UpdatePassword from "@/pages/UpdatePassword";
 import NotFound from "@/pages/NotFound";
 
 type Role = "entrepreneur" | "professional" | "admin" | null;
-type RoleState = Role | undefined; // undefined = still checking
+type RoleState = Role | undefined;
 
-/**
- * RequireAuth
- * - Waits for auth initialization
- * - If not logged in, redirects to /login
- * - Saves "from" path so you can send the user back after login (optional)
- */
 const RequireAuth = ({ children }: { children: JSX.Element }) => {
   const { user, loading } = useAuth();
   const location = useLocation();
@@ -49,16 +43,6 @@ const RequireAuth = ({ children }: { children: JSX.Element }) => {
   return children;
 };
 
-/**
- * RequireRole
- * - Prevents wrong redirects on refresh by using 3-state role resolution:
- *   undefined = still checking
- *   null      = confirmed missing
- *   "role"    = confirmed role
- *
- * - If role is missing, redirects to /choose-role
- * - If role doesn't match required role, redirects to /
- */
 const RequireRole = ({
   children,
   role,
@@ -67,64 +51,52 @@ const RequireRole = ({
   role?: "entrepreneur" | "professional" | "admin";
 }) => {
   const { user, loading, role: userRole, refreshMe } = useAuth();
-
-  // Start as "checking" (undefined) instead of assuming missing (null)
   const [resolvedRole, setResolvedRole] = useState<RoleState>(undefined);
 
   useEffect(() => {
     let mounted = true;
 
     const run = async () => {
-      // Wait for auth init
+      console.log("[RequireRole] run()", { loading, user: !!user, userRole });
+
       if (loading) return;
 
-      // Not logged in
       if (!user) {
         if (mounted) setResolvedRole(null);
         return;
       }
 
-      // Role already in context
       if (userRole) {
+        console.log("[RequireRole] role from context:", userRole);
         if (mounted) setResolvedRole(userRole as Role);
         return;
       }
 
-      // Role unknown -> fetch it (keep "checking" while fetching)
+      console.log("[RequireRole] no role in context, calling refreshMe...");
       if (mounted) setResolvedRole(undefined);
 
       try {
         const me = await refreshMe();
+        console.log("[RequireRole] refreshMe returned:", me);
         if (mounted) setResolvedRole((me?.role ?? null) as Role);
-      } catch {
-        /**
-         * IMPORTANT:
-         * If backend call fails temporarily (network, cold start, etc),
-         * do NOT treat it as "missing role" and redirect away.
-         * Keep it in "checking" state to avoid bouncing to /choose-role.
-         */
+      } catch (e) {
+        console.error("[RequireRole] refreshMe threw:", e);
         if (mounted) setResolvedRole(undefined);
       }
     };
 
     run();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [user, loading, userRole, refreshMe]);
 
-  // Still resolving auth or role -> show loader and do NOT redirect yet
+  console.log("[RequireRole] render", { resolvedRole, loading, userRole });
+
   if (loading || resolvedRole === undefined) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
   }
 
-  // Not logged in
   if (!user) return <Navigate to="/login" replace />;
-
-  // Logged in, but confirmed missing role
   if (resolvedRole === null) return <Navigate to="/choose-role" replace />;
-
-  // Enforce required role
   if (role && resolvedRole !== role) return <Navigate to="/" replace />;
 
   return children;
@@ -136,15 +108,12 @@ export default function AppRoutes() {
       <Routes>
         {/* Public */}
         <Route path="/" element={<Index />} />
-
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
-
         <Route path="/terms" element={<Terms />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/update-password" element={<UpdatePassword />} />
-
         <Route path="/payment-success" element={<PaymentSuccess />} />
 
         {/* Auth required */}
@@ -156,7 +125,6 @@ export default function AppRoutes() {
             </RequireAuth>
           }
         />
-
         <Route
           path="/profile"
           element={
@@ -175,7 +143,6 @@ export default function AppRoutes() {
             </RequireRole>
           }
         />
-
         <Route
           path="/professional-dashboard"
           element={
@@ -184,7 +151,6 @@ export default function AppRoutes() {
             </RequireRole>
           }
         />
-
         <Route
           path="/dashboard"
           element={
@@ -193,7 +159,6 @@ export default function AppRoutes() {
             </RequireRole>
           }
         />
-
         <Route
           path="/intake"
           element={
@@ -202,7 +167,6 @@ export default function AppRoutes() {
             </RequireRole>
           }
         />
-
         <Route
           path="/team-builder"
           element={
@@ -219,7 +183,6 @@ export default function AppRoutes() {
             </RequireRole>
           }
         />
-
         <Route
           path="/team-preview"
           element={
@@ -236,7 +199,6 @@ export default function AppRoutes() {
             </RequireRole>
           }
         />
-
         <Route
           path="/admin"
           element={
