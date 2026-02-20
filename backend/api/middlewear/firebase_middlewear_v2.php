@@ -65,7 +65,6 @@ class FirebaseMiddlewareV2
         $userDoc = [];
         $role = null;
 
-        // Fetch Firestore profile if exists (but DO NOT swallow silently)
         try {
             $snap = $firestore->collection("users")->document($uid)->snapshot();
             if ($snap && $snap->exists()) {
@@ -73,11 +72,11 @@ class FirebaseMiddlewareV2
                 $role = $userDoc["role"] ?? null;
             }
         } catch (\Throwable $e) {
-            // log actual reason for debugging on Render
+            // Log but do NOT block the request — let it continue with empty profile
+            // This prevents a Firestore hiccup from locking out all users
             error_log("[FirebaseMiddlewareV2] Firestore users/$uid read failed: " . $e->getMessage());
-
-            // Do not pretend role is missing when Firestore is broken
-            $this->serverError("Auth profile lookup failed (Firestore)");
+            $userDoc = [];
+            $role = null;
         }
 
         // Auto-admin promotion (only if NO userDoc)
@@ -99,7 +98,7 @@ class FirebaseMiddlewareV2
                 $role = "admin";
             } catch (\Throwable $e) {
                 error_log("[FirebaseMiddlewareV2] Auto-admin write failed: " . $e->getMessage());
-                $this->serverError("Failed to create admin profile");
+                // Don't block — continue without admin role
             }
         }
 

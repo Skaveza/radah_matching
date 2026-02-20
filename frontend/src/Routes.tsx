@@ -73,7 +73,6 @@ const RequireRole = ({
       }
 
       console.log("[RequireRole] no role in context, calling refreshMe...");
-      if (mounted) setResolvedRole(undefined);
 
       try {
         const me = await refreshMe();
@@ -81,7 +80,8 @@ const RequireRole = ({
         if (mounted) setResolvedRole((me?.role ?? null) as Role);
       } catch (e) {
         console.error("[RequireRole] refreshMe threw:", e);
-        if (mounted) setResolvedRole(undefined);
+        // Backend error — send to login rather than hanging forever
+        if (mounted) setResolvedRole(null);
       }
     };
 

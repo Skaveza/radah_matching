@@ -16,9 +16,9 @@ RUN a2enmod rewrite
 RUN sed -i 's!/var/www/html!/var/www/html/public!g' /etc/apache2/sites-available/000-default.conf
 RUN sed -i 's!/var/www/html!/var/www/html/public!g' /etc/apache2/apache2.conf
 
-# Increase stack size to prevent Firestore gRPC recursion overflow
-RUN echo "zend.max_allowed_stack_size=256M" >> /usr/local/etc/php/conf.d/zend-stack.ini
-RUN echo "zend.reserved_stack_size=32M" >> /usr/local/etc/php/conf.d/zend-stack.ini
+# Remove stack size limit entirely
+RUN echo "zend.max_allowed_stack_size=-1" >> /usr/local/etc/php/conf.d/zend-stack.ini
+RUN echo "zend.reserved_stack_size=0" >> /usr/local/etc/php/conf.d/zend-stack.ini
 
 COPY . /var/www/html/
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
