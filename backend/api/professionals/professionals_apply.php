@@ -25,9 +25,24 @@ function require_field(array $body, string $field) {
   return trim((string)$v) !== "";
 }
 
-$mw = new FirebaseMiddlewareV2();
+function is_suspicious(string $years, string $rate): bool {
+  if ($rate === "200_plus" && in_array($years, ["1_3", "3_5"], true)) return true;
+  if ($rate === "150_200" && $years === "1_3") return true;
+  return false;
+}
 
-// IMPORTANT: don't require role at middleware stage
+function compute_flags(array $body): array {
+  $flags = [];
+  if (strlen(trim($body["professional_summary"])) < 40) {
+    $flags[] = "summary_too_short";
+  }
+  if (is_suspicious($body["years_experience"], $body["hourly_rate_range"])) {
+    $flags[] = "suspicious_rate_vs_experience";
+  }
+  return $flags;
+}
+
+$mw = new FirebaseMiddlewareV2();
 $authUser = $mw->verifyToken();
 $uid = $authUser["uid"];
 $userDoc = $authUser["userDoc"] ?? [];
@@ -38,7 +53,6 @@ $now = date("c");
 
 // Ensure user has role professional
 if ($role === null) {
-  // user doc missing or role missing -> set professional now
   $email = trim($authUser["email"] ?? "");
   $name  = $authUser["name"] ?? null;
 
@@ -108,6 +122,12 @@ if (!filter_var($linkedin, FILTER_VALIDATE_URL)) {
 
 $phone = trim((string)$body["phone"]);
 
+// Compute flags and auto-approval
+$flags    = compute_flags($body);
+$approved = empty($flags);
+$status   = $approved ? "approved" : "pending_review";
+
+// Write to professionals collection
 $firestore->collection("professionals")->document($uid)->set([
   "uid" => $uid,
   "name" => $userDoc["name"] ?? ($authUser["name"] ?? null),
@@ -125,16 +145,37 @@ $firestore->collection("professionals")->document($uid)->set([
   "linkedin" => $linkedin,
   "phone" => $phone,
 
-  "status" => "pending",
-  "approved" => false,
+  "status" => $status,
+  "approved" => $approved,
   "rejected" => false,
+  "flags" => $flags,
 
   "updated_at" => $now,
 ], ["merge" => true]);
 
+// Update user doc with status
 $firestore->collection("users")->document($uid)->set([
-  "professional_status" => "pending",
-  "updated_at" => $now
+  "professional_status" => $status,
+  "updated_at" => $now,
 ], ["merge" => true]);
 
-json_response(["success"=>true, "message"=>"Application submitted", "uid"=>$uid, "status"=>"pending"]);
+// If flagged, create admin notification
+if (!empty($flags)) {
+  $firestore->collection("admin_notifications")->add([
+    "type" => "professional_needs_review",
+    "professional_id" => $uid,
+    "professional_email" => $userDoc["email"] ?? ($authUser["email"] ?? null),
+    "flags" => $flags,
+    "status" => "unread",
+    "created_at" => $now,
+  ]);
+}
+
+json_response([
+  "success" => true,
+  "message" => $approved ? "Application approved automatically" : "Application submitted for review",
+  "uid" => $uid,
+  "status" => $status,
+  "approved" => $approved,
+  "flags" => $flags,
+]);
