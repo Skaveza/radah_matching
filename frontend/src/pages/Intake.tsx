@@ -8,6 +8,7 @@ import IntakeStepOne from "@/components/intake/IntakeStepOne";
 import IntakeStepTwo from "@/components/intake/IntakeStepTwo";
 import IntakeStepThree from "@/components/intake/IntakeStepThree";
 import IntakeStepFour from "@/components/intake/IntakeStepFour";
+import { useProject } from "@/lib/ProjectContext";
 import { toast } from "sonner";
 import { apiFetch } from "@/lib/api";
 import { auth } from "@/lib/firebase";
@@ -31,8 +32,11 @@ type CreateProjectResponse = {
 
 const Intake = () => {
   const navigate = useNavigate();
+
   const [currentStep, setCurrentStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+
+  const { refreshProjects, setCurrentProject } = useProject();
 
   const [data, setData] = useState<IntakeData>({
     businessType: "",
@@ -68,9 +72,7 @@ const Intake = () => {
       return;
     }
 
-    // Final submit
-    if (submitting) return;
-    if (!canProceed()) return;
+    if (submitting || !canProceed()) return;
 
     try {
       setSubmitting(true);
@@ -78,7 +80,6 @@ const Intake = () => {
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error("Missing auth token. Please log in again.");
 
-      // Map intake fields to backend schema
       const payload = {
         business_type: data.businessType,
         project_stage: data.projectStage,
@@ -97,17 +98,24 @@ const Intake = () => {
         body: JSON.stringify(payload),
       });
 
-      const projectId = res.project_id || res.id || res.project?.project_id || res.project?.id;
+      const projectId =
+        res.project_id || res.id || res.project?.project_id || res.project?.id;
 
       if (!projectId) {
-        throw new Error("Project created, but no project id was returned by the API.");
+        throw new Error("Project created, but no project id was returned.");
       }
 
-      // Keep for Team Builder + fallback UI
-      localStorage.setItem("activeProjectId", projectId);
-      localStorage.setItem("intakeData", JSON.stringify(data));
+      // 🔥 Sync global state (THIS is the correct architecture)
+      await refreshProjects();
+
+      setCurrentProject({
+        id: projectId,
+        name: data.industry || "New Project",
+        stage: data.projectStage,
+      });
 
       toast.success("Project created. Generating your team...");
+
       navigate(`/team-builder?projectId=${encodeURIComponent(projectId)}`);
     } catch (e: any) {
       toast.error(e?.message || "Failed to create project");
@@ -123,6 +131,7 @@ const Intake = () => {
   return (
     <div className="min-h-screen bg-background">
       <Header />
+
       <main className="pt-32 pb-20">
         <div className="container mx-auto px-6">
           <IntakeProgress currentStep={currentStep} totalSteps={4} />
@@ -149,7 +158,9 @@ const Intake = () => {
                   timeline: data.timeline,
                   budget: data.budget,
                 }}
-                onChange={(field, value) => updateField(field as keyof IntakeData, value)}
+                onChange={(field, value) =>
+                  updateField(field as keyof IntakeData, value)
+                }
               />
             )}
 

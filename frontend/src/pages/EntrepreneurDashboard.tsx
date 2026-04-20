@@ -1,258 +1,284 @@
 // src/pages/EntrepreneurDashboard.tsx
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, LogOut, FileText, Users, ArrowRight, Unlock, Lock, Eye } from "lucide-react";
-import Header from "@/components/landing/Header";
-import { useAuth } from "@/hooks/useAuth";
-import { toast } from "sonner";
-import { apiFetch } from "@/lib/api";
-import { auth } from "@/lib/firebase";
+import { useNavigate, Link } from "react-router-dom";
+import { useProject } from "@/lib/ProjectContext";
+import { listItems, RESOURCES } from "@/lib/projectApi";
+import { getProjectFlow } from "@/lib/navigation/getNextRouteForProject";
+import {
+  ArrowRight, Flame, Users, TrendingUp,
+  CheckCircle2, Clock, AlertTriangle, ChevronRight,
+  Zap, LayoutGrid, Target, Wallet, UserSearch, LineChart
+} from "lucide-react";
 
-type ProjectRow = {
-  project_id: string;
-  project: any;
-  team: any | null; // from /api/projects
+// ── Types ──────────────────────────────────────────────────
+type Milestone = {
+  id: string;
+  title: string;
+  status: string;
+  due_date?: string;
+  progress?: number;
+};
+type Financial = { type: string; amount: number };
+
+// ── Workspace nav cards ────────────────────────────────────
+const NAV_ITEMS = [
+  { label: "Projects",  href: "/projects",  Icon: LayoutGrid, desc: "Manage your ventures"  },
+  { label: "Team",      href: "/team",      Icon: Users,      desc: "Roles & architecture"  },
+  { label: "Pipeline",  href: "/pipeline",  Icon: UserSearch, desc: "Candidate tracking"    },
+  { label: "Execution", href: "/execution", Icon: Target,     desc: "Milestones & tasks"    },
+  { label: "Runway",    href: "/runway",    Icon: Wallet,     desc: "Budget & burn rate"    },
+  { label: "Investors", href: "/investors", Icon: LineChart,  desc: "Readiness & reporting" },
+];
+
+// ── Milestone helpers ──────────────────────────────────────
+const statusDot: Record<string, string> = {
+  completed:   "bg-emerald-500",
+  in_progress: "bg-amber-400",
+  blocked:     "bg-red-500",
+  not_started: "bg-slate-300",
 };
 
+const StatusIcon = ({ status }: { status: string }) => {
+  if (status === "completed")   return <CheckCircle2 size={13} className="text-emerald-500" />;
+  if (status === "in_progress") return <Clock        size={13} className="text-amber-500"   />;
+  if (status === "blocked")     return <AlertTriangle size={13} className="text-red-500"    />;
+  return null;
+};
+
+// ── Dashboard ──────────────────────────────────────────────
 export default function EntrepreneurDashboard() {
+  const { currentProject } = useProject();
   const navigate = useNavigate();
-  const { user, loading: authLoading, signOut } = useAuth();
 
-  const [projects, setProjects] = useState<ProjectRow[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [expanded, setExpanded] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!authLoading && !user) navigate("/login");
-  }, [authLoading, user, navigate]);
+  const [financials, setFinancials] = useState<Financial[]>([]);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [flow, setFlow]             = useState<any>(null);
 
   useEffect(() => {
-    const fetchProjects = async () => {
-      if (!user) return;
+    if (!currentProject?.id) return;
+    Promise.all([
+      listItems<Financial>(RESOURCES.FINANCIAL_ENTRIES, currentProject.id),
+      listItems<Milestone>(RESOURCES.MILESTONES,        currentProject.id),
+      getProjectFlow(currentProject.id),
+    ]).then(([fin, mil, flowData]) => {
+      setFinancials(fin);
+      setMilestones(mil);
+      setFlow(flowData);
+    });
+  }, [currentProject?.id]);
 
-      try {
-        setIsLoading(true);
-        const token = await auth.currentUser?.getIdToken();
-        if (!token) throw new Error("Missing auth token");
-
-        const res = await apiFetch<{ success: boolean; projects: ProjectRow[] }>("/api/projects", {
-          method: "GET",
-          headers: { Authorization: `Bearer ${token}` },
-        });
-
-        setProjects(res.projects || []);
-      } catch (e: any) {
-        toast.error(e.message || "Failed to load your projects");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    if (user) fetchProjects();
-  }, [user]);
-
-  const handleSignOut = async () => {
-    await signOut();
-    navigate("/");
-    toast.success("Signed out successfully");
-  };
-
-  if (authLoading) {
+  // ── Empty state ────────────────────────────────────────
+  if (!currentProject) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
+        <div className="w-14 h-14 rounded-2xl bg-amber-50 flex items-center justify-center mb-5">
+          <Zap size={26} className="text-amber-500" />
+        </div>
+        <h2 className="text-2xl font-semibold mb-2 text-foreground">Welcome to Radah Works</h2>
+        <p className="text-muted-foreground mb-6 max-w-xs text-sm leading-relaxed">
+          Your startup execution hub. Start by creating your first project.
+        </p>
+        <Link
+          to="/projects?new=1"
+          className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-medium text-sm transition-colors"
+        >
+          Create first project <ArrowRight size={15} />
+        </Link>
       </div>
     );
   }
 
-  return (
-    <div className="min-h-screen bg-background">
-      <Header />
+  // ── Computed metrics ───────────────────────────────────
+  const totalCosts   = financials.filter(f => f.type === "cost").reduce((s, f) => s + f.amount, 0);
+  const totalRevenue = financials.filter(f => f.type === "revenue").reduce((s, f) => s + f.amount, 0);
+  const burnRate     = Math.max(0, totalCosts - totalRevenue);
+  const runway       = burnRate > 0 && currentProject.budget_total
+    ? Math.floor(currentProject.budget_total / burnRate)
+    : null;
 
-      <main className="pt-32 pb-20">
-        <div className="container mx-auto px-6">
-          <div className="max-w-5xl mx-auto">
-            <div className="flex items-center justify-between mb-10">
-              <div>
-                <h1 className="font-display text-3xl font-bold text-foreground mb-2">Your Dashboard</h1>
-                <p className="text-muted-foreground">
-                  Welcome back, {user?.displayName || user?.email}
-                </p>
-              </div>
+  const blockedMilestones  = milestones.filter(m => m.status === "blocked");
+  const upcomingMilestones = milestones.filter(m => m.status !== "completed").slice(0, 4);
 
-              <div className="flex items-center gap-3">
-                <Button variant="outline" onClick={handleSignOut} className="gap-2">
-                  <LogOut className="w-4 h-4" />
-                  Sign Out
-                </Button>
-
-                <Button variant="premium" asChild>
-                  <Link to="/intake" className="gap-2">
-                    <Users className="w-4 h-4" />
-                    New Project
-                  </Link>
-                </Button>
-              </div>
-            </div>
-
-            {isLoading ? (
-              <div className="flex items-center justify-center py-20">
-                <Loader2 className="w-8 h-8 animate-spin text-primary" />
-              </div>
-            ) : projects.length > 0 ? (
-              <Tabs defaultValue="all" className="w-full">
-                <TabsList className="mb-8">
-                  <TabsTrigger value="all">All Projects ({projects.length})</TabsTrigger>
-                  <TabsTrigger value="ready">
-                    Team Ready ({projects.filter((p) => !!p.team).length})
-                  </TabsTrigger>
-                  <TabsTrigger value="pending">
-                    Team Missing ({projects.filter((p) => !p.team).length})
-                  </TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="all" className="space-y-4">
-                  {projects.map((p) => (
-                    <ProjectCard
-                      key={p.project_id}
-                      row={p}
-                      isExpanded={expanded === p.project_id}
-                      onToggle={() => setExpanded(expanded === p.project_id ? null : p.project_id)}
-                    />
-                  ))}
-                </TabsContent>
-
-                <TabsContent value="ready" className="space-y-4">
-                  {projects.filter((p) => !!p.team).map((p) => (
-                    <ProjectCard
-                      key={p.project_id}
-                      row={p}
-                      isExpanded={expanded === p.project_id}
-                      onToggle={() => setExpanded(expanded === p.project_id ? null : p.project_id)}
-                    />
-                  ))}
-                </TabsContent>
-
-                <TabsContent value="pending" className="space-y-4">
-                  {projects.filter((p) => !p.team).map((p) => (
-                    <ProjectCard
-                      key={p.project_id}
-                      row={p}
-                      isExpanded={expanded === p.project_id}
-                      onToggle={() => setExpanded(expanded === p.project_id ? null : p.project_id)}
-                    />
-                  ))}
-                </TabsContent>
-              </Tabs>
-            ) : (
-              <EmptyState />
-            )}
-          </div>
-        </div>
-      </main>
-    </div>
-  );
-}
-
-function ProjectCard({
-  row,
-  isExpanded,
-  onToggle,
-}: {
-  row: ProjectRow;
-  isExpanded: boolean;
-  onToggle: () => void;
-}) {
-  const navigate = useNavigate();
-  const project = row.project || {};
-  const hasTeam = !!row.team;
+  const metrics = [
+    {
+      label: "Runway",
+      value: runway ? `${runway} mo` : "—",
+      sub: burnRate > 0 ? `$${burnRate.toLocaleString()} / mo burn` : "No burn rate set",
+      Icon: Flame,
+      color: "text-orange-500",
+      bg:    "bg-orange-50",
+      href:  "/runway",
+    },
+    {
+      label: "Team",
+      value: `${currentProject.team_completion || 0}%`,
+      sub:   "Completion",
+      Icon:  Users,
+      color: "text-blue-500",
+      bg:    "bg-blue-50",
+      href:  "/team",
+    },
+    {
+      label: "Investor ready",
+      value: `${currentProject.investor_readiness_score || 0}%`,
+      sub:   (currentProject.investor_readiness_score || 0) < 50 ? "Keep building" : "Strong position",
+      Icon:  TrendingUp,
+      color: "text-emerald-500",
+      bg:    "bg-emerald-50",
+      href:  "/investors",
+    },
+  ];
 
   return (
-    <div className="bg-card rounded-2xl border border-border overflow-hidden hover:shadow-lg transition-all duration-200 hover:border-accent/30">
-      <div className="p-6 cursor-pointer" onClick={onToggle}>
-        <div className="flex items-start justify-between">
-          <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center">
-              <FileText className="w-6 h-6 text-accent" />
-            </div>
+    <div className="space-y-6">
 
-            <div>
-              <div className="flex items-center gap-3 mb-1">
-                <h3 className="font-semibold text-foreground">{project.industry || "Untitled Project"}</h3>
-
-                {hasTeam ? (
-                  <span className="px-2 py-0.5 text-xs rounded-full flex items-center gap-1 bg-success/20 text-success">
-                    <Unlock className="w-3 h-3" />
-                    Team Ready
-                  </span>
-                ) : (
-                  <span className="px-2 py-0.5 text-xs rounded-full flex items-center gap-1 bg-muted text-muted-foreground">
-                    <Lock className="w-3 h-3" />
-                    Team Missing
-                  </span>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-                <span>Stage: {project.project_stage || "-"}</span>
-                <span>•</span>
-                <span>Budget: {project.budget_range || "-"}</span>
-                <span>•</span>
-                <span>{project.created_at ? new Date(project.created_at).toLocaleDateString() : ""}</span>
-              </div>
-            </div>
-          </div>
-
-          <Button variant="ghost" size="sm" className="gap-2">
-            {isExpanded ? "Hide" : "View"}
-            <ArrowRight className={`w-4 h-4 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
-          </Button>
-        </div>
+      {/* ── Page header ───────────────────────────────── */}
+      <div>
+        <p className="text-xs font-medium text-amber-500 uppercase tracking-widest mb-1">
+          {currentProject.stage || "Early stage"}
+        </p>
+        <h1 className="text-2xl font-semibold text-foreground tracking-tight">
+          {currentProject.name}
+        </h1>
+        <p className="text-sm text-muted-foreground mt-0.5">
+          Here's where things stand today.
+        </p>
       </div>
 
-      {isExpanded && (
-        <div className="px-6 pb-6 pt-2 border-t border-border/50">
-          <div className="mt-4 space-y-3">
-            <div className="text-sm">
-              <span className="text-muted-foreground">Description: </span>
-              <span className="text-foreground">{project.description || "-"}</span>
+      {/* ── Next step banner ──────────────────────────── */}
+      {flow && (
+        <div
+          className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 p-5 text-white cursor-pointer group"
+          onClick={() => navigate(flow.route)}
+        >
+          {/* Decorative circles */}
+          <div className="absolute -right-6 -top-6 w-28 h-28 rounded-full bg-white/10 pointer-events-none" />
+          <div className="absolute right-4 -bottom-8 w-20 h-20 rounded-full bg-white/10 pointer-events-none" />
+
+          <div className="relative">
+            {/* Step indicator */}
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-medium bg-white/20 rounded-full px-2.5 py-0.5">
+                Step {flow.step.step} of {flow.step.total}
+              </span>
+              <div className="flex gap-1">
+                {Array.from({ length: flow.step.total }).map((_, i) => (
+                  <div
+                    key={i}
+                    className={`h-1.5 w-5 rounded-full transition-all ${
+                      i < flow.step.step ? "bg-white" : "bg-white/30"
+                    }`}
+                  />
+                ))}
+              </div>
             </div>
 
-            {hasTeam ? (
-              <div className="mt-4 flex flex-col sm:flex-row gap-3">
-                <Button variant="outline" className="gap-2" onClick={() => navigate(`/team-preview/${row.project_id}`)}>
-                  <Eye className="w-4 h-4" />
-                  View Team
-                </Button>
-              </div>
-            ) : (
-              <div className="mt-4 flex flex-col sm:flex-row gap-3">
-                <Button variant="premium" onClick={() => navigate(`/team-builder/${row.project_id}`)}>
-                  Generate Team
-                </Button>
-                <Button asChild variant="outline">
-                  <Link to="/intake">Edit Project</Link>
-                </Button>
-              </div>
-            )}
+            <p className="text-xs text-white/70 mb-0.5">Recommended next step</p>
+            <h3 className="text-lg font-semibold mb-4">{flow.step.label}</h3>
+
+            <div className="flex items-center gap-2 text-sm font-medium group-hover:gap-3 transition-all">
+              Continue <ArrowRight size={15} />
+            </div>
           </div>
         </div>
       )}
-    </div>
-  );
-}
 
-function EmptyState() {
-  return (
-    <div className="text-center py-16 px-6 bg-card rounded-2xl border border-dashed border-border">
-      <Users className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-      <h3 className="font-semibold text-foreground mb-2">No projects yet</h3>
-      <p className="text-sm text-muted-foreground mb-6">Create your first project to generate a team blueprint.</p>
-      <Button variant="premium" asChild>
-        <Link to="/intake">Create Project</Link>
-      </Button>
+      {/* ── Metrics row ───────────────────────────────── */}
+      <div className="grid grid-cols-3 gap-3">
+        {metrics.map(({ label, value, sub, Icon, color, bg, href }) => (
+          <Link
+            key={label}
+            to={href}
+            className="bg-white border border-border rounded-2xl p-4 hover:shadow-sm transition-shadow"
+          >
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center mb-3 ${bg}`}>
+              <Icon size={15} className={color} />
+            </div>
+            <div className="text-xl font-semibold text-foreground leading-none mb-1">{value}</div>
+            <div className="text-xs font-medium text-foreground">{label}</div>
+            <div className="text-xs text-muted-foreground mt-0.5 leading-snug">{sub}</div>
+          </Link>
+        ))}
+      </div>
+
+      {/* ── Milestones ────────────────────────────────── */}
+      <div className="bg-white border border-border rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold text-foreground text-sm">Active milestones</h3>
+          <Link
+            to="/execution"
+            className="text-xs text-amber-500 hover:text-amber-600 flex items-center gap-0.5 transition-colors"
+          >
+            View all <ChevronRight size={13} />
+          </Link>
+        </div>
+
+        {upcomingMilestones.length === 0 ? (
+          <div className="text-center py-7">
+            <p className="text-sm text-muted-foreground mb-3">No milestones yet.</p>
+            <Link
+              to="/execution"
+              className="text-xs font-medium text-amber-500 hover:text-amber-600 inline-flex items-center gap-1"
+            >
+              Add milestones <ArrowRight size={12} />
+            </Link>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {upcomingMilestones.map(m => (
+              <div key={m.id} className="flex items-center gap-3">
+                <div className={`w-2 h-2 rounded-full shrink-0 ${statusDot[m.status] ?? "bg-slate-200"}`} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-foreground truncate">{m.title}</div>
+                  {m.due_date && (
+                    <div className="text-xs text-muted-foreground">{m.due_date}</div>
+                  )}
+                </div>
+                <div className="shrink-0">
+                  <StatusIcon status={m.status} />
+                </div>
+              </div>
+            ))}
+
+            {blockedMilestones.length > 0 && (
+              <div className="mt-1 pt-3 border-t border-border flex items-center gap-2">
+                <AlertTriangle size={13} className="text-red-500 shrink-0" />
+                <p className="text-xs text-red-600 font-medium">
+                  {blockedMilestones.length} blocker{blockedMilestones.length > 1 ? "s" : ""} need attention
+                </p>
+                <Link to="/execution" className="ml-auto text-xs text-red-500 hover:underline">
+                  Fix →
+                </Link>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Workspace nav ─────────────────────────────── */}
+      <div>
+        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-widest mb-3 px-0.5">
+          Workspace
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+          {NAV_ITEMS.map(({ label, href, Icon, desc }) => (
+            <Link
+              key={label}
+              to={href}
+              className="group flex items-center gap-3 bg-white border border-border rounded-xl p-3.5 hover:border-amber-300 hover:shadow-sm transition-all"
+            >
+              <div className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center shrink-0 group-hover:bg-amber-50 transition-colors">
+                <Icon size={15} className="text-muted-foreground group-hover:text-amber-500 transition-colors" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-foreground leading-none mb-0.5">{label}</div>
+                <div className="text-xs text-muted-foreground truncate">{desc}</div>
+              </div>
+            </Link>
+          ))}
+        </div>
+      </div>
+
     </div>
   );
 }

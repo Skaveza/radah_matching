@@ -27,31 +27,42 @@ foreach ($required as $f) {
 
 $projectId = trim($body["project_id"]);
 $professionalId = trim($body["professional_id"]);
-$role = $body["role"] ?? "member";
+$role = trim($body["role"] ?? "member");
 
 $firestore = new FirestoreService();
 
-// Load project + ownership + unlock check
+// Load project
 $projSnap = $firestore->collection("projects")->document($projectId)->snapshot();
-if (!$projSnap->exists()) json_response(["success"=>false,"error"=>"Project not found"], 404);
+if (!$projSnap->exists()) {
+  json_response(["success"=>false,"error"=>"Project not found"], 404);
+}
 
 $project = $projSnap->data();
+
+// Ownership check
 if (($project["entrepreneur_id"] ?? "") !== $entrepreneurId) {
   json_response(["success"=>false,"error"=>"Forbidden"], 403);
 }
+
+// Subscription gate (your Stripe SaaS model)
 if (!(bool)($project["unlocked"] ?? false)) {
-  json_response(["success"=>false,"error"=>"Payment required to invite professionals"], 403);
+  json_response(["success"=>false,"error"=>"Subscription required"], 403);
 }
 
-// Create invite doc
+// Create invite (IMPORTANT: explicit external payment model)
 $ref = $firestore->collection("project_team_members")->add([
   "project_id" => $projectId,
   "team_id" => $projectId,
   "professional_id" => $professionalId,
   "entrepreneur_id" => $entrepreneurId,
   "role" => $role,
+
   "status" => "invited",
+  "contract_type" => "external",   // 🔥 KEY ADDITION
+  "payment_mode" => "off_platform",
+
   "created_at" => date("c"),
+  "updated_at" => date("c"),
 ]);
 
 json_response([
