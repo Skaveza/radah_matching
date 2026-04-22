@@ -5,7 +5,7 @@ require __DIR__ . '/../../api/middlewear/firebase_middlewear_v2.php';
 
 header("Content-Type: application/json");
 
-// ── Helpers defined first so they are available everywhere in this file ───────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 function json_response(array $data, int $code = 200): void {
     http_response_code($code);
     echo json_encode($data, JSON_PRETTY_PRINT);
@@ -23,7 +23,7 @@ function verifyProjectOwnership(FirestoreService $db, string $projectId, string 
     }
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
+// ── Auth ─────────────────────────────────────────────────────────────────────
 $mw       = new FirebaseMiddlewareV2();
 $authUser = $mw->verifyToken(["entrepreneur"]);
 $uid      = $authUser["uid"];
@@ -31,16 +31,16 @@ $uid      = $authUser["uid"];
 // ── Parse URL: /api/project-data/{resource}[/{id}] ───────────────────────────
 $path     = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $parts    = explode('/', trim($path, '/'));
-// index:       0      1               2            3
-// parts: ['api', 'project-data', '{resource}', '{id?}']
 $resource = $parts[2] ?? null;
-$id       = $parts[3] ?? null;   // 'bulk' for bulk-create, or a Firestore doc ID
+$id       = $parts[3] ?? null;
 $isBulk   = ($id === 'bulk');
 $method   = $_SERVER['REQUEST_METHOD'];
 
 // ── Resource slug → Firestore collection ─────────────────────────────────────
+// ✅ Added 'team-members' => 'team_members' to fix the 404 error
 $collections = [
     'team-roles'        => 'team_roles',
+    'team-members'      => 'team_members',   // ← THIS WAS MISSING
     'milestones'        => 'milestones',
     'candidates'        => 'candidates',
     'financial-entries' => 'financial_entries',
@@ -55,7 +55,7 @@ if (!$resource || !isset($collections[$resource])) {
 $collection = $collections[$resource];
 $firestore  = new FirestoreService();
 
-// ── GET /api/project-data/{resource}?project_id=xxx ─────────────────────────
+// ── GET /api/project-data/{resource}?project_id=xxx ──────────────────────────
 if ($method === 'GET') {
     $projectId = $_GET['project_id'] ?? null;
     if (!$projectId) {
@@ -75,7 +75,7 @@ if ($method === 'GET') {
     json_response(["success" => true, "data" => $items]);
 }
 
-// ── POST /api/project-data/{resource}/bulk ───────────────────────────────────
+// ── POST /api/project-data/{resource}/bulk ────────────────────────────────────
 if ($method === 'POST' && $isBulk) {
     $body  = json_decode(file_get_contents('php://input'), true);
     $items = $body['items'] ?? [];
@@ -119,7 +119,7 @@ if ($method === 'POST') {
     json_response(["success" => true, "data" => array_merge(['id' => $ref->id()], $body)]);
 }
 
-// ── PUT /api/project-data/{resource}/{id} ────────────────────────────────────
+// ── PUT /api/project-data/{resource}/{id} ─────────────────────────────────────
 if ($method === 'PUT') {
     if (!$id || $isBulk) {
         json_response(["success" => false, "error" => "Document ID required"], 400);
@@ -139,9 +139,8 @@ if ($method === 'PUT') {
     }
 
     $body['updated_at'] = date('c');
-    unset($body['id']); // never overwrite the Firestore doc ID
+    unset($body['id']);
 
-    // Build field-path array for partial Firestore update
     $updates = [];
     foreach ($body as $k => $v) {
         $updates[] = ['path' => $k, 'value' => $v];
@@ -150,7 +149,7 @@ if ($method === 'PUT') {
     json_response(["success" => true, "data" => array_merge(['id' => $id], $body)]);
 }
 
-// ── DELETE /api/project-data/{resource}/{id} ─────────────────────────────────
+// ── DELETE /api/project-data/{resource}/{id} ──────────────────────────────────
 if ($method === 'DELETE') {
     if (!$id || $isBulk) {
         json_response(["success" => false, "error" => "Document ID required"], 400);
