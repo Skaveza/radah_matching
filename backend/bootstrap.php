@@ -9,6 +9,7 @@ $allowed_origins = [
   "https://www.radahworks.com",
   "http://localhost:5173",
   "http://localhost:3000",
+  "http://localhost:8080",
 ];
 
 // Optional: allow origin from env too (nice if you change domains again)
